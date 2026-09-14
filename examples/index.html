@@ -1,0 +1,139 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Dan "Ducky" Little -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>qdgeo examples</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf8;
+    --panel: #fff;
+    --ink: #1b1a18;
+    --muted: #6b6862;
+    --line: #ddd9d2;
+    --accent: #2f6f4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --panel: #1e2024;
+      --ink: #e8e6e1;
+      --muted: #9b978f;
+      --line: #32353b;
+      --accent: #6fbb92;
+    }
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font:
+      15px/1.6 ui-sans-serif,
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 48px 20px 64px;
+  }
+  h1 {
+    font-size: 1.9rem;
+    margin: 0 0 6px;
+    letter-spacing: -0.02em;
+  }
+  p.lede {
+    margin: 0 0 8px;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+  .size {
+    font-size: 0.9rem;
+    color: var(--muted);
+    margin: 0 0 28px;
+  }
+  .cards {
+    display: grid;
+    gap: 14px;
+  }
+  a.card {
+    display: block;
+    padding: 18px 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+  }
+  a.card:hover,
+  a.card:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+  }
+  a.card h2 {
+    font-size: 1.05rem;
+    margin: 0 0 4px;
+    color: var(--accent);
+  }
+  a.card p {
+    margin: 0;
+    font-size: 0.92rem;
+    color: var(--muted);
+  }
+  footer {
+    margin-top: 32px;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  footer a {
+    color: var(--accent);
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.88em;
+  }
+</style>
+
+<div class="wrap">
+  <h1>qdgeo examples</h1>
+  <p class="lede">
+    Buffer and boolean geometry running in WebAssembly. Each page does all four boolean operations
+    and the buffer, with live controls, against the same module.
+  </p>
+  <p class="size">The module is one file, 112 KB raw and 43.9 KB gzipped, with no host imports.</p>
+
+  <div class="cards">
+    <a class="card" href="canvas.html">
+      <h2>Plain canvas</h2>
+      <p>
+        No dependencies at all. Drag two shapes and watch the result update. Includes a
+        ring-with-hole preset.
+      </p>
+    </a>
+    <a class="card" href="openlayers.html">
+      <h2>OpenLayers</h2>
+      <p>
+        Reads <code>getFlatCoordinates()</code> and <code>getEnds()</code> straight across, with no
+        format conversion in between.
+      </p>
+    </a>
+    <a class="card" href="maplibre.html">
+      <h2>MapLibre GL JS</h2>
+      <p>
+        Converts to GeoJSON on the way out, and does the geometry in Web Mercator so buffer
+        distances are in metres.
+      </p>
+    </a>
+  </div>
+
+  <footer>
+    <a href="https://github.com/theduckylittle/qdgeo">Source and documentation on GitHub</a>
+  </footer>
+</div>

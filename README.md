@@ -83,11 +83,14 @@ and the seven exports.
 
 Three standalone pages in [`examples/`](examples/) — plain canvas, OpenLayers,
 and MapLibre GL JS — each running all four boolean operations and the buffer
-with live controls.
+with live controls. They are published from `main` at
+**[theduckylittle.github.io/qdgeo](https://theduckylittle.github.io/qdgeo/)**.
+
+To run them locally:
 
 ```sh
 zig build wasm && cp zig-out/bin/qdgeo.wasm examples/vendor/
-python3 -m http.server -d examples 8000   # then open /canvas.html
+python3 -m http.server -d examples 8000   # then open http://localhost:8000/
 ```
 
 `examples/lib/geometry.js` wraps the ABI in about a hundred lines if you would
@@ -412,6 +415,28 @@ The overlay is a degenerate-tolerant Martinez-Rueda sweep line
 adaptive predicates at every sign decision, and structure-of-arrays storage with
 order-preserving `u128` sort keys. [CLAUDE.md](CLAUDE.md) documents the design
 and the invariants that are easy to break.
+
+## Continuous integration
+
+Two workflows in [`.github/workflows/`](.github/workflows/).
+
+**`ci.yml`** runs on every push and pull request: unit tests in Debug and
+ReleaseSafe, all four build targets, the WASM runtime checks, Prettier, `zig fmt`,
+and the JTS Topology Suite. It prints the artifact size to the run summary, so a
+change that inflates the download is visible in the pull request.
+
+The JTS step is gated with `--expect 155` rather than `--strict`. The six
+failures are the [invalid input](#invalid-input) policy, so `--strict` would
+always trip; a drop below the baseline is a regression, and raising the baseline
+is a deliberate commit.
+
+**`pages.yml`** rebuilds the WASM module, assembles `examples/` into a site with
+the fresh module, checks every page is present, and deploys to GitHub Pages.
+Enable it once under **Settings → Pages → Source → GitHub Actions**.
+
+The differential comparison suite is not in CI. It needs a Rust toolchain, GEOS,
+the parcel dataset and several npm engines, and it measures timings, which a
+shared runner cannot do meaningfully. Run it locally with `npm run compare`.
 
 ## License
 

@@ -1,0 +1,68 @@
+name: Examples
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Read the repository, write an OIDC token for the Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. Queue rather than cancel, so a run that is already
+# publishing is allowed to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build the WASM module
+        run: zig build wasm
+
+      - name: Assemble the site
+        run: |
+          # The examples fetch ./vendor/qdgeo.wasm, so the freshly built module
+          # replaces whatever is committed. The site is the examples directory.
+          mkdir -p site
+          cp -r examples/. site/
+          cp zig-out/bin/qdgeo.wasm site/vendor/qdgeo.wasm
+          # README.md is for the repository, not the published site.
+          rm -f site/README.md site/vendor/README.md
+          ls -R site
+
+      - name: Check the pages the site will serve
+        run: |
+          for page in index canvas openlayers maplibre; do
+            test -s "site/$page.html" || { echo "missing site/$page.html"; exit 1; }
+          done
+          test -s site/vendor/qdgeo.wasm
+          test -s site/lib/geometry.js
+          echo "site is complete"
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel an in-flight run when the branch is pushed again.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Unit tests
+        run: zig build test
+
+      - name: Unit tests, ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Build every target
+        run: |
+          zig build
+          zig build native -Doptimize=ReleaseSafe
+          zig build wasm
+          zig build run
+
+      - name: Report artifact size
+        run: |
+          raw=$(stat -c%s zig-out/bin/qdgeo.wasm)
+          gz=$(gzip -9 -c zig-out/bin/qdgeo.wasm | wc -c)
+          echo "WASM: $raw bytes raw, $gz gzipped"
+          echo "### WASM artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$raw\` bytes raw, \`$gz\` gzipped" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: WASM runtime checks
+        run: npm run test:wasm
+
+      - name: Formatting
+        run: npm run format:check
+
+      - name: Zig formatting
+        run: zig fmt --check build.zig src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: JTS Topology Suite
+        run: |
+          python -m pip install --quiet shapely
+          # The six failures are a documented policy choice about invalid input,
+          # so --strict would always trip. Gate on the baseline instead: a drop
+          # below it is a regression, and raising it is a deliberate commit.
+          python tests/jts/run.py --expect 155

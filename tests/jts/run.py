@@ -258,6 +258,11 @@ def main():
     parser.add_argument('--json', type=Path, help='write the full row-by-row result here')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--strict', action='store_true', help='exit nonzero if anything fails')
+    parser.add_argument('--expect', type=int, metavar='N',
+                        help='exit nonzero if fewer than N assertions pass. This is the CI gate: '
+                             'six failures are a documented policy choice about invalid input, so '
+                             '--strict would always trip, but a drop below the baseline is a '
+                             'regression.')
     args = parser.parse_args()
 
     engine = Qdgeo()
@@ -296,6 +301,9 @@ def main():
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(rows, indent=2))
+    if args.expect is not None and passed < args.expect:
+        print(f'\nREGRESSION: expected at least {args.expect} passing, got {passed}')
+        return 1
     return 1 if (failed and args.strict) else 0
 
 

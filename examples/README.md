@@ -1,5 +1,10 @@
 # Examples
 
+Published from `main` at
+**[theduckylittle.github.io/qdgeo](https://theduckylittle.github.io/qdgeo/)** by
+`.github/workflows/pages.yml`, which rebuilds the WASM module first so the live
+site is never running a stale one.
+
 Three standalone pages, each one file plus the shared helper. They all do the
 same four boolean operations and the same buffer, so the interesting part is how
 each host hands geometry over.

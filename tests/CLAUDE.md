@@ -65,6 +65,21 @@ enough to change conclusions — qdgeo and Rust Geo are the only symmetric pair.
 Every reduced failure is committed under `fixtures/` and re-probed by
 `probes.py`. Everything under `generated/` is gitignored build output.
 
+## What CI gates
+
+`.github/workflows/ci.yml` runs the Zig tests, all four build targets, the WASM
+runtime checks, Prettier, `zig fmt`, and the JTS suite on every push.
+
+The JTS step uses `--expect 155`, not `--strict`. Six failures are the
+documented invalid-input policy, so `--strict` would always fail. If you make a
+JTS case pass, raise the number in the workflow in the same commit — that is
+what keeps the baseline honest.
+
+The differential suite is deliberately **not** in CI: it needs Rust, GEOS, the
+parcel dataset and several npm engines, and its timings are meaningless on a
+shared runner. Run `npm run compare` locally before claiming a performance
+change.
+
 ## Adding tests
 
 - A geometry bug gets a case in `src/tests.zig` *and*, if JTS covers the shape,
