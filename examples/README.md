@@ -36,6 +36,13 @@ tiles, so those two want a network connection. The geometry never does:
 `canvas.html` works entirely offline, and on the map pages the shapes still
 compute and draw if the tiles fail.
 
+## Shared files
+
+`lib/examples.css` holds the chrome every page uses: the colour tokens for both
+themes, the page frame, and the control and readout styles. A page adds only
+what is specific to it — the canvas demo styles its canvas and legend, the
+landing page styles its cards, and the two map demos add no CSS at all.
+
 ## The shared helper
 
 `lib/geometry.js` wraps the flat ABI in about a hundred lines. It exists to keep

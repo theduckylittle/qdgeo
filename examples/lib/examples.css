@@ -1,0 +1,151 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Dan "Ducky" Little
+
+   Shared chrome for the example pages. Each page adds only what is specific to
+   it: the canvas demo styles its canvas and legend, the landing page styles its
+   cards, and the two map demos add nothing at all. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf8;
+  --panel: #fff;
+  --ink: #1b1a18;
+  --muted: #6b6862;
+  --line: #ddd9d2;
+  --accent: #2f6f4f;
+  /* The two operands, wherever a page draws them separately. */
+  --a: #3b6ea5;
+  --b: #b5651d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16171a;
+    --panel: #1e2024;
+    --ink: #e8e6e1;
+    --muted: #9b978f;
+    --line: #32353b;
+    --accent: #6fbb92;
+    --a: #7aa9d8;
+    --b: #d99a5f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+.wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
+}
+
+p.lede {
+  margin: 0 0 20px;
+  color: var(--muted);
+  max-width: 64ch;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+/* Panels and controls */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.controls {
+  padding: 14px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+legend {
+  float: left;
+  margin-right: 10px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+label.op {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.9rem;
+}
+
+input[type='range'] {
+  width: 190px;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+
+/* The map demos both use a full-width map of the same height. */
+
+#map {
+  height: 520px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Result readout */
+
+.out {
+  margin-top: 12px;
+  padding: 10px 14px;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.out b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.err {
+  color: #c0392b;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 10px;
+}

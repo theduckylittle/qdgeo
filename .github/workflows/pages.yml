@@ -49,6 +49,7 @@ jobs:
           done
           test -s site/vendor/qdgeo.wasm
           test -s site/lib/geometry.js
+          test -s site/lib/examples.css
           echo "site is complete"
 
       - uses: actions/configure-pages@v5

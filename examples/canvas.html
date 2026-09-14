@@ -4,99 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Canvas example</title>
+<link rel="stylesheet" href="./lib/examples.css" />
 <style>
-  :root {
-    color-scheme: light dark;
-    --bg: #fbfaf8;
-    --panel: #fff;
-    --ink: #1b1a18;
-    --muted: #6b6862;
-    --line: #ddd9d2;
-    --accent: #2f6f4f;
-    --a: #3b6ea5;
-    --b: #b5651d;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16171a;
-      --panel: #1e2024;
-      --ink: #e8e6e1;
-      --muted: #9b978f;
-      --line: #32353b;
-      --accent: #6fbb92;
-      --a: #7aa9d8;
-      --b: #d99a5f;
-    }
-  }
-  * {
-    box-sizing: border-box;
-  }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font:
-      15px/1.5 ui-sans-serif,
-      system-ui,
-      -apple-system,
-      'Segoe UI',
-      Roboto,
-      sans-serif;
-  }
-  .wrap {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 24px 20px 48px;
-  }
-  h1 {
-    font-size: 1.4rem;
-    margin: 0 0 4px;
-    letter-spacing: -0.01em;
-  }
-  p.lede {
-    margin: 0 0 20px;
-    color: var(--muted);
-    max-width: 60ch;
-  }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-  }
-  .controls {
-    padding: 14px 16px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 18px;
-    align-items: center;
-    margin-bottom: 14px;
-  }
-  fieldset {
-    border: 0;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-  legend {
-    float: left;
-    margin-right: 10px;
-    padding: 0;
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-  label.op {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.9rem;
-  }
-  input[type='range'] {
-    width: 190px;
-    vertical-align: middle;
-    accent-color: var(--accent);
-  }
   select {
     font: inherit;
     padding: 4px 6px;
@@ -111,23 +20,6 @@
     height: auto;
     border-radius: 10px;
     touch-action: none;
-  }
-  .out {
-    margin-top: 12px;
-    padding: 10px 14px;
-    font-size: 0.88rem;
-    color: var(--muted);
-  }
-  .out b {
-    color: var(--ink);
-    font-weight: 600;
-  }
-  .err {
-    color: #c0392b;
-  }
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.85em;
   }
   .key {
     display: flex;
@@ -151,7 +43,9 @@
   <h1>Plain canvas</h1>
   <p class="lede">
     No mapping library, no projection — just two shapes, the WASM module, and
-    <code>&lt;canvas&gt;</code>. Drag either shape to see the result update.
+    <code>&lt;canvas&gt;</code>. Drag either shape to see the result update. The buffer distance
+    applies to whichever operation is selected: on a boolean operation it grows or shrinks the
+    result.
   </p>
 
   <div class="panel controls">
@@ -174,7 +68,7 @@
       </select>
     </fieldset>
     <fieldset id="distance-group">
-      <legend>Distance</legend>
+      <legend>Buffer</legend>
       <input type="range" id="distance" min="-40" max="60" value="18" step="1" />
       <span id="distance-value" style="min-width: 4ch">18</span>
     </fieldset>
@@ -297,7 +191,11 @@
       note ||
       `<b>${result.length}</b> polygon${result.length === 1 ? '' : 's'}, ` +
         `<b>${rings}</b> ring${rings === 1 ? '' : 's'}, <b>${points}</b> coordinates.` +
-        (buffering ? ` Distance <b>${distance}</b>${distance < 0 ? ' (shrinking)' : ''}.` : '');
+        (distance === 0
+          ? ''
+          : buffering
+            ? ` Distance <b>${distance}</b>${distance < 0 ? ' (shrinking)' : ''}.`
+            : ` Then ${distance < 0 ? 'shrunk' : 'grown'} by <b>${Math.abs(distance)}</b>.`);
   }
 
   // Dragging: pick whichever shell contains the pointer, topmost first.
@@ -348,12 +246,10 @@
   });
   for (const radio of document.querySelectorAll('input[name=op]')) {
     radio.addEventListener('change', () => {
-      document.getElementById('distance-group').style.opacity = op() === 'buffer' ? '1' : '.4';
       draw();
     });
   }
 
   geo = await load('./vendor/qdgeo.wasm');
-  document.getElementById('distance-group').style.opacity = '.4';
   draw();
 </script>

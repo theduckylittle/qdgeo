@@ -87,6 +87,12 @@ export fn geom_flat_input(coordinates: u32, rings: u32, polygons: u32, line_stri
 /// `subject` is how many of the block's leading polygons form the first operand;
 /// the rest are the second. Union cannot tell the difference and buffer takes
 /// the whole block, so both ignore it in practice.
+///
+/// `distance` is the buffer distance, and it applies to every operation, not
+/// just op 4. On a boolean operation a nonzero distance buffers the *result*,
+/// so "intersect these, then grow the overlap by 5 m" is one call. Zero leaves
+/// a boolean result alone, which is what a host that never wants a buffer
+/// already passes. `steps` is segments per quarter circle on a rounded corner.
 export fn geom_flat_execute(op: u32, subject: u32, distance: f64, steps: u32) u32 {
     releaseResults();
     run(op, subject, distance, steps) catch |err| return status(err);
@@ -98,20 +104,34 @@ fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
     const input = try flat.input(scratch.allocator(), borrowed);
-    var output = if (op == 4)
-        try geo.bufferInput(allocator, input, distance, .{ .quadrant_segments = steps })
-    else output: {
-        const mode: geo.Mode = switch (op) {
-            0 => .union_all,
-            1 => .intersection,
-            2 => .difference,
-            3 => .symmetric_difference,
-            else => return error.InvalidOptions,
-        };
-        const split = @min(subject, input.polygons.len);
-        break :output try geo.boolean(allocator, input.polygons[0..split], input.polygons[split..], mode, .{});
+    if (op == 4) {
+        var output = try geo.bufferInput(allocator, input, distance, .{ .quadrant_segments = steps });
+        defer output.deinit();
+        flat_result = try flat.output(allocator, output.polygons);
+        return;
+    }
+
+    const mode: geo.Mode = switch (op) {
+        0 => .union_all,
+        1 => .intersection,
+        2 => .difference,
+        3 => .symmetric_difference,
+        else => return error.InvalidOptions,
     };
+    const split = @min(subject, input.polygons.len);
+    var output = try geo.boolean(allocator, input.polygons[0..split], input.polygons[split..], mode, .{});
     defer output.deinit();
+
+    // A nonzero distance buffers the result of the boolean operation. Doing it
+    // here rather than in a second call keeps the intermediate geometry inside
+    // the module: a host that wants "difference, then grow by 5 m" pays one
+    // crossing instead of two, and never has to copy the intermediate out.
+    if (distance != 0) {
+        var grown = try geo.bufferAll(allocator, output.polygons, distance, .{ .quadrant_segments = steps });
+        defer grown.deinit();
+        flat_result = try flat.output(allocator, grown.polygons);
+        return;
+    }
     flat_result = try flat.output(allocator, output.polygons);
 }
 

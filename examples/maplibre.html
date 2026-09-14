@@ -5,122 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MapLibre example</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-<style>
-  :root {
-    color-scheme: light dark;
-    --bg: #fbfaf8;
-    --panel: #fff;
-    --ink: #1b1a18;
-    --muted: #6b6862;
-    --line: #ddd9d2;
-    --accent: #2f6f4f;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16171a;
-      --panel: #1e2024;
-      --ink: #e8e6e1;
-      --muted: #9b978f;
-      --line: #32353b;
-      --accent: #6fbb92;
-    }
-  }
-  * {
-    box-sizing: border-box;
-  }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font:
-      15px/1.5 ui-sans-serif,
-      system-ui,
-      -apple-system,
-      'Segoe UI',
-      Roboto,
-      sans-serif;
-  }
-  .wrap {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 24px 20px 48px;
-  }
-  h1 {
-    font-size: 1.4rem;
-    margin: 0 0 4px;
-    letter-spacing: -0.01em;
-  }
-  p.lede {
-    margin: 0 0 20px;
-    color: var(--muted);
-    max-width: 64ch;
-  }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-  }
-  .controls {
-    padding: 14px 16px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 18px;
-    align-items: center;
-    margin-bottom: 14px;
-  }
-  fieldset {
-    border: 0;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-  legend {
-    float: left;
-    margin-right: 10px;
-    padding: 0;
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-  label.op {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.9rem;
-  }
-  input[type='range'] {
-    width: 190px;
-    accent-color: var(--accent);
-  }
-  #map {
-    height: 520px;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  .out {
-    margin-top: 12px;
-    padding: 10px 14px;
-    font-size: 0.88rem;
-    color: var(--muted);
-  }
-  .out b {
-    color: var(--ink);
-    font-weight: 600;
-  }
-  .err {
-    color: #c0392b;
-  }
-  .hint {
-    font-size: 0.85rem;
-    color: var(--muted);
-    margin-top: 10px;
-  }
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.85em;
-  }
-</style>
+<link rel="stylesheet" href="./lib/examples.css" />
 
 <div class="wrap">
   <h1>MapLibre GL JS</h1>
@@ -142,7 +27,7 @@
       <label class="op"><input type="radio" name="op" value="buffer" /> Buffer</label>
     </fieldset>
     <fieldset id="distance-group">
-      <legend>Distance</legend>
+      <legend>Buffer</legend>
       <input type="range" id="distance" min="-400" max="900" value="300" step="10" />
       <span id="distance-value" style="min-width: 6ch">300 m</span>
     </fieldset>
@@ -292,7 +177,11 @@
       out.innerHTML =
         `<b>${polygons.length}</b> polygon${polygons.length === 1 ? '' : 's'}, ` +
         `<b>${rings}</b> ring${rings === 1 ? '' : 's'}, <b>${points}</b> coordinates.` +
-        (buffering ? ` Distance <b>${distance} m</b>${distance < 0 ? ' (shrinking)' : ''}.` : '');
+        (distance === 0
+          ? ''
+          : buffering
+            ? ` Distance <b>${distance} m</b>${distance < 0 ? ' (shrinking)' : ''}.`
+            : ` Then ${distance < 0 ? 'shrunk' : 'grown'} by <b>${Math.abs(distance)} m</b>.`);
     } catch (error) {
       map.getSource('result').setData(collection([]));
       out.innerHTML = `<span class="err">${error.message}</span>`;
@@ -305,9 +194,7 @@
   });
   for (const radio of document.querySelectorAll('input[name=op]')) {
     radio.addEventListener('change', () => {
-      document.getElementById('distance-group').style.opacity = op() === 'buffer' ? '1' : '.4';
       update();
     });
   }
-  document.getElementById('distance-group').style.opacity = '.4';
 </script>

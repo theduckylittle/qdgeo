@@ -125,6 +125,20 @@ for (const [op, expected] of [
 ]) {
   assert.equal(area(flat(pair, () => w.geom_flat_execute(op, 1, 0, 0))), expected);
 }
+// A nonzero distance buffers the result of a boolean operation, so a host gets
+// "intersect, then grow" in one crossing. The intersection is the unit square
+// (1, 1)-(2, 2); growing it by 1 adds its perimeter and four quarter-circles.
+const grown = area(flat(pair, () => w.geom_flat_execute(OP.intersection, 1, 1, 16)));
+assert.ok(
+  Math.abs(grown - (1 + 4 + Math.PI)) < 0.02,
+  `intersection buffered by 1 should be about ${(1 + 4 + Math.PI).toFixed(3)}, got ${grown}`,
+);
+// Zero leaves a boolean result exactly as it was.
+assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 16))), 7);
+// A negative distance erodes the result rather than growing it.
+const eroded = area(flat(pair, () => w.geom_flat_execute(OP.union, 1, -0.25, 16)));
+assert.ok(eroded > 0 && eroded < 7, `union eroded by 0.25 should shrink, got ${eroded}`);
+
 // Difference is asymmetric: giving both squares to the subject leaves nothing to cut.
 assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.difference, 2, 0, 0))), 7);
 assert.equal(w.geom_flat_execute(9, 0, 0, 0), 6);

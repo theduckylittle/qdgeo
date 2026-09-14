@@ -45,7 +45,8 @@ class Geometry {
    * @param op one of OP
    * @param options.subject for the boolean ops, how many leading polygons make
    *   up the first operand. The rest become the second.
-   * @param options.distance for OP.buffer. Negative shrinks.
+   * @param options.distance buffer distance. Applies to every operation: on a
+   *   boolean operation a nonzero distance buffers the result. Negative shrinks.
    * @param options.steps segments per quarter circle on a rounded corner.
    * @returns a list of polygons in the same nested shape.
    */

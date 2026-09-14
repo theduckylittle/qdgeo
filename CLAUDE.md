@@ -189,6 +189,12 @@ Three things there are load-bearing and easy to break:
   browser surface: eight exports, no WKB. Anything added there is paid for by
   every page. `abi_wkb.zig` links only into the native library, which is what a
   Python module would use.
+- **Buffer composes onto the boolean operations.** `geom_flat_execute` applies a
+  nonzero `distance` to the *result* of ops 0-3, not just to op 4. It is done
+  inside `abi.zig` rather than by the host calling twice, so the intermediate
+  geometry never crosses the boundary. The Zig API composes the same thing by
+  hand — `boolean(...)` then `bufferAll(result.polygons, ...)` — and does not
+  need an option for it.
 - **New operations cost a `Mode` value, not an export.** `geom_flat_execute`
   takes an op code and an operand split; `geometry.Mode.covers` is the entire
   difference between union, intersection, difference and symmetric difference,

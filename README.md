@@ -4,8 +4,9 @@
 written in Zig and compiled to WebAssembly.
 
 qdgeo does five things: union, intersection, difference, symmetric difference,
-and rounded buffer. That is very nearly all the geometry a web mapping
-application asks for. The WASM artifact is **112 KB raw, 43.9 KB gzipped**,
+and rounded buffer. The buffer is also available as an option on the four
+boolean operations, so "subtract this, then grow the result by 5 m" is one call.
+That is very nearly all the geometry a web mapping application asks for. The WASM artifact is **112 KB raw, 43.9 KB gzipped**,
 declares no imports, and has no C or C++ dependency.
 
 > **Still experimental.** The test suites are green — 26 of 26 differential
@@ -321,6 +322,12 @@ Single-threaded and non-reentrant:
   0 union, 1 intersection, 2 difference, 3 symmetric difference, 4 buffer.
   `subject` is how many leading polygons form the first operand; the rest are
   the second. A new operation costs a value here, not another export.
+
+  `distance` applies to **every** operation, not only op 4. On a boolean
+  operation a nonzero distance buffers the result, so "intersect these two, then
+  grow the overlap by 5 m" is a single call and the intermediate geometry never
+  crosses the boundary. Pass `0` to leave a boolean result alone. `steps` is
+  segments per quarter circle on a rounded corner.
 - `geom_flat_result_ptr()`, `geom_flat_result_coordinates()`,
   `geom_flat_result_rings()`, `geom_flat_result_polygons()` — results are always
   areal, so the result block carries coordinates, ring ends, and polygon ends.
