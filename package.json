@@ -1,0 +1,26 @@
+{
+  "name": "qdgeo",
+  "description": "Quick & Dirty Geographic Library: buffer and boolean geometry for the browser, in Zig.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Dan \"Ducky\" Little",
+  "scripts": {
+    "test:wasm": "node tests/wasm.mjs",
+    "compare": ".venv/bin/python tests/compare/run.py",
+    "format": "prettier --write \"**/*.{js,mjs,html}\"",
+    "format:check": "prettier --check \"**/*.{js,mjs,html}\"",
+    "test:jts": ".venv/bin/python tests/jts/run.py",
+    "fetch-data": ".venv/bin/python tests/compare/fetch.py",
+    "sizes": "node tests/compare/sizes/run.mjs"
+  },
+  "dependencies": {
+    "@turf/buffer": "7.4.0",
+    "@turf/union": "7.4.0",
+    "jsts": "^2.12.1",
+    "polyclip-ts": "0.16.8"
+  },
+  "devDependencies": {
+    "prettier": "3.9.6"
+  }
+}

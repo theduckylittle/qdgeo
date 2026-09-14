@@ -1,0 +1,313 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Dan "Ducky" Little -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MapLibre example</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf8;
+    --panel: #fff;
+    --ink: #1b1a18;
+    --muted: #6b6862;
+    --line: #ddd9d2;
+    --accent: #2f6f4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --panel: #1e2024;
+      --ink: #e8e6e1;
+      --muted: #9b978f;
+      --line: #32353b;
+      --accent: #6fbb92;
+    }
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font:
+      15px/1.5 ui-sans-serif,
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+  }
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 24px 20px 48px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  p.lede {
+    margin: 0 0 20px;
+    color: var(--muted);
+    max-width: 64ch;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  .controls {
+    padding: 14px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  legend {
+    float: left;
+    margin-right: 10px;
+    padding: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  label.op {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.9rem;
+  }
+  input[type='range'] {
+    width: 190px;
+    accent-color: var(--accent);
+  }
+  #map {
+    height: 520px;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .out {
+    margin-top: 12px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  .out b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .err {
+    color: #c0392b;
+  }
+  .hint {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+  }
+</style>
+
+<div class="wrap">
+  <h1>MapLibre GL JS</h1>
+  <p class="lede">
+    MapLibre wants GeoJSON, so this page converts on the way out — a few lines, and on results this
+    small it costs well under a millisecond. The geometry is computed in Web Mercator metres and
+    converted back to longitude and latitude for the map. Drag either shape by its centre handle.
+  </p>
+
+  <div class="panel controls">
+    <fieldset>
+      <legend>Operation</legend>
+      <label class="op"><input type="radio" name="op" value="union" checked /> Union</label>
+      <label class="op"><input type="radio" name="op" value="intersection" /> Intersection</label>
+      <label class="op"><input type="radio" name="op" value="difference" /> Difference</label>
+      <label class="op"
+        ><input type="radio" name="op" value="symmetricDifference" /> Symmetric difference</label
+      >
+      <label class="op"><input type="radio" name="op" value="buffer" /> Buffer</label>
+    </fieldset>
+    <fieldset id="distance-group">
+      <legend>Distance</legend>
+      <input type="range" id="distance" min="-400" max="900" value="300" step="10" />
+      <span id="distance-value" style="min-width: 6ch">300 m</span>
+    </fieldset>
+  </div>
+
+  <div class="panel"><div id="map"></div></div>
+  <div class="panel out" id="out">Loading…</div>
+  <p class="hint">
+    Basemap tiles come from OpenStreetMap. If they do not load, the shapes still will — the style is
+    defined inline and the geometry never touches the network.
+  </p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module">
+  import { load, OP, regular, star } from './lib/geometry.js';
+
+  const geo = await load('./vendor/qdgeo.wasm');
+  const out = document.getElementById('out');
+
+  // Web Mercator, so buffer distances are in metres rather than degrees. Doing
+  // the geometry in a projected space and converting at the edge is the normal
+  // pattern: the library is planar and reads no CRS.
+  const R = 6378137;
+  const toMercator = ([lon, lat]) => [
+    (R * lon * Math.PI) / 180,
+    R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)),
+  ];
+  const toLonLat = ([x, y]) => [
+    (x / R) * (180 / Math.PI),
+    (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) * (180 / Math.PI),
+  ];
+
+  const feature = (polygons) => ({
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'MultiPolygon',
+      coordinates: polygons.map((p) => p.map((r) => r.map(toLonLat))),
+    },
+  });
+  const collection = (features) => ({ type: 'FeatureCollection', features });
+
+  const origin = toMercator([4.895168, 52.370216]);
+  const offsets = [
+    [0, 0],
+    [0, 0],
+  ];
+  const build = () => [
+    [star(origin[0] - 700 + offsets[0][0], origin[1] + offsets[0][1], 1500, 620)],
+    [regular(origin[0] + 900 + offsets[1][0], origin[1] + 200 + offsets[1][1], 1200, 6)],
+  ];
+
+  // The style is inline rather than a URL, so `load` fires and the geometry works
+  // even with no network at all. The raster source is a nicety; if the tiles fail
+  // the background layer still gives the shapes something to sit on.
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '&copy; OpenStreetMap contributors',
+        },
+      },
+      layers: [
+        { id: 'background', type: 'background', paint: { 'background-color': '#e8e4dc' } },
+        { id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-opacity': 0.55 } },
+      ],
+    },
+    center: toLonLat(origin),
+    zoom: 11,
+  });
+
+  // One draggable marker per shape, which keeps the example free of any editing
+  // interaction code.
+  const handles = [];
+  map.on('load', () => {
+    map.addSource('operands', { type: 'geojson', data: collection([]) });
+    map.addSource('result', { type: 'geojson', data: collection([]) });
+    map.addLayer({
+      id: 'operands-fill',
+      type: 'fill',
+      source: 'operands',
+      paint: { 'fill-color': '#3b6ea5', 'fill-opacity': 0.15 },
+    });
+    map.addLayer({
+      id: 'operands-line',
+      type: 'line',
+      source: 'operands',
+      paint: { 'line-color': '#3b6ea5', 'line-width': 1.5 },
+    });
+    map.addLayer({
+      id: 'result-fill',
+      type: 'fill',
+      source: 'result',
+      paint: { 'fill-color': '#2f6f4f', 'fill-opacity': 0.28 },
+    });
+    map.addLayer({
+      id: 'result-line',
+      type: 'line',
+      source: 'result',
+      paint: { 'line-color': '#2f6f4f', 'line-width': 3 },
+    });
+
+    const starts = [
+      toLonLat([origin[0] - 700, origin[1]]),
+      toLonLat([origin[0] + 900, origin[1] + 200]),
+    ];
+    starts.forEach((position, i) => {
+      const marker = new maplibregl.Marker({ draggable: true, color: i ? '#b5651d' : '#3b6ea5' })
+        .setLngLat(position)
+        .addTo(map);
+      marker.on('drag', () => {
+        const moved = toMercator(marker.getLngLat().toArray());
+        const home = toMercator(starts[i]);
+        offsets[i] = [moved[0] - home[0], moved[1] - home[1]];
+        update();
+      });
+      handles.push(marker);
+    });
+    update();
+  });
+
+  const op = () => document.querySelector('input[name=op]:checked').value;
+
+  function update() {
+    if (!map.getSource('result')) return;
+    const distance = Number(document.getElementById('distance').value);
+    const buffering = op() === 'buffer';
+    const [a, b] = build();
+    map
+      .getSource('operands')
+      .setData(collection(buffering ? [feature([a])] : [feature([a]), feature([b])]));
+    try {
+      const polygons = geo.run({ polygons: buffering ? [a] : [a, b] }, OP[op()], {
+        subject: 1,
+        distance,
+        steps: 16,
+      });
+      map.getSource('result').setData(collection(polygons.length ? [feature(polygons)] : []));
+      const rings = polygons.reduce((n, p) => n + p.length, 0);
+      const points = polygons.reduce((n, p) => n + p.reduce((m, r) => m + r.length, 0), 0);
+      out.innerHTML =
+        `<b>${polygons.length}</b> polygon${polygons.length === 1 ? '' : 's'}, ` +
+        `<b>${rings}</b> ring${rings === 1 ? '' : 's'}, <b>${points}</b> coordinates.` +
+        (buffering ? ` Distance <b>${distance} m</b>${distance < 0 ? ' (shrinking)' : ''}.` : '');
+    } catch (error) {
+      map.getSource('result').setData(collection([]));
+      out.innerHTML = `<span class="err">${error.message}</span>`;
+    }
+  }
+
+  document.getElementById('distance').addEventListener('input', (event) => {
+    document.getElementById('distance-value').textContent = `${event.target.value} m`;
+    update();
+  });
+  for (const radio of document.querySelectorAll('input[name=op]')) {
+    radio.addEventListener('change', () => {
+      document.getElementById('distance-group').style.opacity = op() === 'buffer' ? '1' : '.4';
+      update();
+    });
+  }
+  document.getElementById('distance-group').style.opacity = '.4';
+</script>

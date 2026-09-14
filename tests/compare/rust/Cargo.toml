@@ -1,0 +1,21 @@
+[package]
+name = "geo-comparison"
+version = "0.1.0"
+edition = "2024"
+
+# rust-geo behind this project's own flat ABI, compiled to wasm32 so the suite
+# compares WASM against WASM in one Node host, through one interchange format,
+# at one timing boundary.
+[lib]
+name = "geo_comparison"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+geo = { version = "=0.33.1", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

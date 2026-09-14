@@ -1,0 +1,8 @@
+node_modules/
+.zig-cache/
+zig-out/
+examples/vendor/
+
+# Data, not source: committed reduced-failure fixtures and generated reports.
+tests/compare/generated/
+tests/compare/fixtures/

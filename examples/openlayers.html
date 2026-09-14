@@ -1,0 +1,247 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Dan "Ducky" Little -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenLayers example</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@10.3.1/ol.css" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf8;
+    --panel: #fff;
+    --ink: #1b1a18;
+    --muted: #6b6862;
+    --line: #ddd9d2;
+    --accent: #2f6f4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --panel: #1e2024;
+      --ink: #e8e6e1;
+      --muted: #9b978f;
+      --line: #32353b;
+      --accent: #6fbb92;
+    }
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font:
+      15px/1.5 ui-sans-serif,
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+  }
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 24px 20px 48px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  p.lede {
+    margin: 0 0 20px;
+    color: var(--muted);
+    max-width: 64ch;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  .controls {
+    padding: 14px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  legend {
+    float: left;
+    margin-right: 10px;
+    padding: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  label.op {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.9rem;
+  }
+  input[type='range'] {
+    width: 190px;
+    accent-color: var(--accent);
+  }
+  #map {
+    height: 520px;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .out {
+    margin-top: 12px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  .out b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .err {
+    color: #c0392b;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+  }
+</style>
+
+<div class="wrap">
+  <h1>OpenLayers</h1>
+  <p class="lede">
+    OpenLayers already stores geometry as one flat coordinate array plus ring ends — the same layout
+    this library reads and writes. So the geometry goes straight across with
+    <strong>no format conversion at all</strong>: see <code>fromOpenLayers()</code> in this page's
+    source. Drag either shape.
+  </p>
+
+  <div class="panel controls">
+    <fieldset>
+      <legend>Operation</legend>
+      <label class="op"><input type="radio" name="op" value="union" checked /> Union</label>
+      <label class="op"><input type="radio" name="op" value="intersection" /> Intersection</label>
+      <label class="op"><input type="radio" name="op" value="difference" /> Difference</label>
+      <label class="op"
+        ><input type="radio" name="op" value="symmetricDifference" /> Symmetric difference</label
+      >
+      <label class="op"><input type="radio" name="op" value="buffer" /> Buffer</label>
+    </fieldset>
+    <fieldset id="distance-group">
+      <legend>Distance</legend>
+      <input type="range" id="distance" min="-400" max="900" value="300" step="10" />
+      <span id="distance-value" style="min-width: 6ch">300 m</span>
+    </fieldset>
+  </div>
+
+  <div class="panel"><div id="map"></div></div>
+  <div class="panel out" id="out">Loading…</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ol@10.3.1/dist/ol.js"></script>
+<script type="module">
+  import { load, OP, regular, star } from './lib/geometry.js';
+
+  const geo = await load('./vendor/qdgeo.wasm');
+  const out = document.getElementById('out');
+
+  // OpenLayers keeps `flatCoordinates` and `ends` on every Polygon. `ends` counts
+  // *numbers*, so dividing by the stride turns them into the coordinate counts
+  // this library's ABI wants. Nothing is rebuilt and nothing is serialised.
+  function fromOpenLayers(polygon) {
+    const stride = polygon.getStride();
+    const flat = polygon.getFlatCoordinates();
+    const ends = polygon.getEnds().map((end) => end / stride);
+    const rings = [];
+    let start = 0;
+    for (const end of ends) {
+      const ring = [];
+      for (let i = start; i < end; i++) ring.push([flat[i * stride], flat[i * stride + 1]]);
+      rings.push(ring);
+      start = end;
+    }
+    return rings;
+  }
+
+  const toOpenLayers = (polygons) =>
+    new ol.geom.MultiPolygon(polygons.map((p) => p.map((ring) => ring.map(([x, y]) => [x, y]))));
+
+  // Two operands, in EPSG:3857 metres, over a stretch of Amsterdam.
+  const centre = ol.proj.fromLonLat([4.895168, 52.370216]);
+  const shapeA = new ol.Feature(new ol.geom.Polygon([star(centre[0] - 700, centre[1], 1500, 620)]));
+  const shapeB = new ol.Feature(
+    new ol.geom.Polygon([regular(centre[0] + 900, centre[1] + 200, 1200, 6)]),
+  );
+
+  const style = (colour, width) =>
+    new ol.style.Style({
+      fill: new ol.style.Fill({ color: colour + '22' }),
+      stroke: new ol.style.Stroke({ color: colour, width }),
+    });
+  const operands = new ol.source.Vector({ features: [shapeA, shapeB] });
+  const results = new ol.source.Vector();
+
+  const map = new ol.Map({
+    target: 'map',
+    layers: [
+      new ol.layer.Tile({ source: new ol.source.OSM(), opacity: 0.55 }),
+      new ol.layer.Vector({ source: operands, style: style('#3b6ea5', 1.5) }),
+      new ol.layer.Vector({ source: results, style: style('#2f6f4f', 3) }),
+    ],
+    view: new ol.View({ center: centre, zoom: 12 }),
+  });
+  map.addInteraction(
+    new ol.interaction.Translate({ features: new ol.Collection([shapeA, shapeB]) }),
+  );
+
+  const op = () => document.querySelector('input[name=op]:checked').value;
+
+  function update() {
+    const distance = Number(document.getElementById('distance').value);
+    const buffering = op() === 'buffer';
+    const a = fromOpenLayers(shapeA.getGeometry());
+    const b = fromOpenLayers(shapeB.getGeometry());
+    results.clear();
+    try {
+      const polygons = geo.run({ polygons: buffering ? [a] : [a, b] }, OP[op()], {
+        subject: 1,
+        distance,
+        steps: 16,
+      });
+      if (polygons.length) results.addFeature(new ol.Feature(toOpenLayers(polygons)));
+      const rings = polygons.reduce((n, p) => n + p.length, 0);
+      const points = polygons.reduce((n, p) => n + p.reduce((m, r) => m + r.length, 0), 0);
+      out.innerHTML =
+        `<b>${polygons.length}</b> polygon${polygons.length === 1 ? '' : 's'}, ` +
+        `<b>${rings}</b> ring${rings === 1 ? '' : 's'}, <b>${points}</b> coordinates.` +
+        (buffering ? ` Distance <b>${distance} m</b>${distance < 0 ? ' (shrinking)' : ''}.` : '');
+    } catch (error) {
+      out.innerHTML = `<span class="err">${error.message}</span>`;
+    }
+  }
+
+  shapeA.getGeometry().on('change', update);
+  shapeB.getGeometry().on('change', update);
+  document.getElementById('distance').addEventListener('input', (event) => {
+    document.getElementById('distance-value').textContent = `${event.target.value} m`;
+    update();
+  });
+  for (const radio of document.querySelectorAll('input[name=op]')) {
+    radio.addEventListener('change', () => {
+      document.getElementById('distance-group').style.opacity = op() === 'buffer' ? '1' : '.4';
+      update();
+    });
+  }
+  document.getElementById('distance-group').style.opacity = '.4';
+  update();
+</script>
