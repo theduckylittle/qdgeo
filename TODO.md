@@ -640,11 +640,58 @@ the default does not change.
 
 ### 2. Resource safety, because a browser tab is the target
 
-- [ ] **Establish the input envelope.** The worst case in the dataset — the
-      19,208-coordinate parcel buffer — peaks at **104 MiB of the 512 MiB WASM
-      heap**. That is about 5x headroom, so a parcel five times larger exhausts
-      it, and nothing in the library says so. Publish the size it is good for,
-      and fail predictably past it.
+**The 104 MiB figure below was stale; re-measured 2026-09-15 through the flat
+ABI, reading `memory.buffer.byteLength` after each call.** The complex parcel
+buffer peaks at 25.7 MiB, not 104, and the largest union is the real worst case:
+
+| workload | input coords | peak heap | KiB/coord |
+| --- | ---: | ---: | ---: |
+| `parcels-union-10` | 80 | 1.4 MiB | 18.40 |
+| `parcels-union-100` | 936 | 2.1 MiB | 2.26 |
+| `parcels-union-1000` | 17,231 | 12.6 MiB | 0.75 |
+| `parcels-union-4040` | 135,080 | **89.8 MiB** | 0.68 |
+| `complex-parcel-buffer +2` | 19,208 | 25.7 MiB | 1.37 |
+| `uni-k256-s3072` (hits the fallback) | 28,397 | 55.1 MiB | **1.99** |
+
+Fixed overhead dominates below ~1,000 coordinates; past that the marginal cost
+settles near **0.68 KiB per coordinate for a union and 1.4 for a buffer**. On a
+512 MiB heap that is roughly 750,000 coordinates for a union and 370,000 for a
+buffer — but linear extrapolation is the weak part of this and the numbers past
+the measured range are an estimate, not a bound.
+
+**The fallback path costs about 3x per coordinate** because it runs the overlay
+twice more over a larger, fully-noded path set. That is ~260,000 coordinates of
+headroom, and it is the number that actually gates the promise, because nothing
+tells a caller in advance whether their input will take that path.
+
+- [x] **Do not hold the re-noding engine in the caller's arena.** `renodeOnce`
+      allocated its Engine from the scratch arena that `execute` keeps alive
+      through both retries, so a pass that only needs to hand back paths kept
+      every event as well. Giving it an arena of its own and returning the paths
+      in one block took `uni-k256-s3072` from 71.1 MiB to **55.1**, a 23% cut on
+      the worst fallback case, with no change to any result.
+- [x] **Two allocation fixes, worth 2.3x on the path that needed it most.**
+      Measured with a counting allocator, *all* of the union's peak arrived in
+      one step — `load` — and almost none of it was the arrangement: events plus
+      points are 21 MiB of what was an 81.8 MiB peak.
+      - `ensureTotalCapacity` asks `growCapacity` for the next geometric step,
+        which overshot 261,686 events to **392,537**. `ensureTotalCapacityPrecise`
+        with an explicit eighth of headroom for subdivision fixes it. Precise
+        *without* headroom is worse than either — subdivision then appends past
+        capacity and a doubling inside an arena keeps the old buffer too, 130 MiB
+        against 45.
+      - `renodeOnce` allocated its Engine from the arena `execute` holds through
+        both retries, so a pass that only hands back paths kept every event.
+      Together: `parcels-union-4040` 89.8 → **81.8 MiB**, `complex-parcel-buffer`
+      25.7 → **23.7**, and the worst fallback case 71.1 → **31.1 MiB**.
+- [x] **No leak across calls.** Eight repeats of the same workload hold flat at
+      11.6 MiB and 23.7 MiB — freed memory is reused, the high-water mark is one
+      call's working set, not a running total.
+- [ ] **Publish the envelope.** The table above is measured; nothing in the
+      README or the ABI docs says any of it, and no limit enforces it.
+      **Deferred by decision (2026-09-15):** a WASM memory ceiling is a
+      well-understood constraint for this audience, and the two allocation fixes
+      above bought enough headroom that this is not what gates the label.
 - [ ] **Test recoverable exhaustion.** `abi.zig` maps `OutOfMemory` to status 1,
       but nothing exercises it: there is no test that drives the WASM heap to
       exhaustion, asserts status 1 rather than a trap, and then asserts the
@@ -653,7 +700,6 @@ the default does not change.
 - [ ] **Calibrate the limits.** `max_work`, `max_nodes` and `max_output_points`
       are round numbers, and exactly one test touches any of them. They should
       be derived from the envelope above and each have a test that trips it.
-
 ### 3. Behaviour on messy input — decided
 
 - [x] **Invalid geometry is rejected, and that is the documented policy.** A
@@ -679,19 +725,646 @@ adjudicated vertex error is `0 m`. The two are the same decision.
       reproduces the README's numbers off this machine. The file is byte
       identical to the one the published figures were measured on.
 
-### 5. Hardening
+### Chunking: what it can and cannot do here
 
-- [ ] **Give the sweep assembly twin half-edges.** Build both directions of each
-      result edge and pick the boundary side from the transition, the way the
-      removed `overlay.zig` did. Degree balance would hold by construction
-      instead of depending on the ray-sort in `emit` being right. Every fixture
-      passes today; this makes an implicit invariant explicit.
+The question is whether a windowed or tiled overlay removes the WASM memory
+ceiling. Measured rather than argued:
+
+**Host-level cascading already works, today, with no library change.**
+`unionAll` is n-ary and associative, so a host can fold in batches. Folding the
+4,040 parcels in batches of 500 or 1,000 returns **the same 3 polygons and
+bit-identical area** as the one-shot union.
+
+| | polygons | area | peak | batch failures |
+| --- | ---: | ---: | ---: | ---: |
+| one shot | 3 | 338046121.626241 | 81.8 MiB | — |
+| batches of 1,000 | 3 | 338046121.626241 | 67.5 MiB | 0 |
+| batches of 500 | 3 | 338046121.626241 | 71.4 MiB | 0 |
+| batches of 250 | 955 | 338046467.165185 | 71.2 MiB | **4** |
+
+Two findings, and the second is the important one:
+
+1. **It buys 13-18%, not an order of magnitude.** The peak is set by the largest
+   single call, and a cascade still has to merge everything eventually.
+2. **Smaller batches make correctness worse.** At 250 the cascade hit four
+   `UnnodableCrossing` failures and returned the wrong answer, on input the
+   one-shot union handles. Chunking multiplies the number of overlay calls and
+   every one carries the ~0.1% exposure from gate 6 — and a subset's local
+   geometry is not easier than the whole, it is just different. Any chunking
+   recipe published here has to say that.
+
+**Streaming the sweep** — the "window of nodes" idea — is sound in principle:
+the status line is already a window, and the residency is an artefact of how
+results are collected, not of the algorithm. It would need result edges emitted
+at their closing event, rings assembled incrementally as chains close, and
+hole-to-shell nesting resolved through recorded chain ids instead of the `prev`
+pointers into the event array. Worst case stays O(n) — one ring spanning the
+whole sweep keeps its whole chain open — and it costs the graph-labelling
+fallback and `renodeOnce`, both of which need the finished arrangement. Those
+only run on failure, so they could stay non-streaming.
+
+**Do the constant factors first.** Two allocation fixes above took the fallback
+path down 2.3x in an afternoon, and `Event` is still 64 bytes. Streaming is a
+large architectural change against a peak that is, right now, only a quarter
+arrangement.
+
+### 6. Valid input can still fail, and the README does not say so
+
+`error.UnnodableCrossing` — 4 of 3,946 cluster unions, 0 of 57,990 cluster
+buffers — is raised on input that is **valid**. The README's only mention of a
+noding failure sits in the "Invalid input" section, in a table row that reads
+`Noding failure | error | retries on coarser grids`, framed as a consequence of
+bad geometry. A caller who reads that concludes that clean input always
+succeeds. It does not.
+
+This is a documentation gate, not a code one: the behaviour is deliberate and
+the alternative is snap-rounding, which is already declined above. What is
+missing is a sentence saying that a valid union can return an error, at roughly
+what rate, and what a caller should do about it.
+
+- [x] **Said in the README**, as its own section — "When valid input fails" —
+      rather than buried in the rejection policy, with the measured rate, the
+      cause, and what a caller can do. The invalid-input table now points at it,
+      and the ABI status list says `5` covers both meanings.
+- [ ] **Give it a distinct ABI status.** Documented for now, not fixed: a host
+      still cannot tell "your geometry is broken" from "this arrangement is not
+      representable in f64" without checking its own input, and those want
+      different responses. The Zig API already distinguishes them
+      (`error.UnnodableCrossing`); the flat ABI does not.
+
+### 5. The buffer produces unclosed boundaries on ~0.6% of valid input
+
+**Largely closed (2026-09-14) by the graph-labelling fallback — see "What
+shipped" below. The investigation is kept because the remaining failures are the
+residue of the same problem.** The record from here to that section is the
+original diagnosis, written before the fix.
+
+`bufferAll` returns `error.NodingFailure` from `sweep.zig`'s contour walk on
+valid input with default options. Two minimal cases:
+
+- two axis-aligned rectangles `(0,0)-(2,1)` and `(2,2)-(3,3)` buffered by `+1`,
+  where `unionAll` on the same two rectangles succeeds;
+- the L-shape `(1,0)(3,0)(3,3)(0,3)(0,1)(1,1)(1,0)` eroded by `-1.25`.
+
+Measured over ~300,000 random valid inputs: **0 failures across ~120k boolean
+operations, 95 failures in ~15k positive buffers and 95 in ~15k negative
+buffers** — about 0.6% of buffer calls. Reproducible across seeds.
+`quadrant_segments` changes *which* cases fail, not *that* they do.
+
+The cause is not noding. Instrumenting the L-shape just before the contour walk
+shows **3 chosen edges, 4 vertices, 0 unnoded crossings, and 2 vertices of
+degree 1** — the crossings are all found. It is the transition labelling in
+`resolve`/`enter` marking a set of result edges that is not a closed boundary,
+and `walk != start` is only where it surfaces. A larger case shows a vertex with
+`in = 2, out = 1`, so the radial rays do not alternate, which they must for any
+boundary.
+
+**GEOS does not have this bug, and its retry ladder is not why.** Every one of
+24 randomly found inputs that qdgeo cannot buffer, GEOS buffers correctly — and
+it does so on the *first* attempt, at full double precision. The output carries
+irrational arc vertices with full mantissas and nothing lands on a coarse grid,
+so `bufferReducedPrecision` never ran. Snap rounding is irrelevant here; the
+difference is structural.
+
+JTS/GEOS build a `PlanarGraph` in which **both directed edges of every edge
+exist by construction** (`DirectedEdge` pairs), propagate depth over connected
+subgraphs seeded by ray casting, and keep edges where depth crosses 0/1. Degree
+balance is therefore guaranteed before any boundary is traced. qdgeo labels
+transitions during the sweep and then traces contours, relying on the radial
+ray-sort in `emit` to pair incoming with outgoing edges — so a labelling that
+marks a non-closed set has nothing to catch it until the walk runs off the end.
+
+### The paired assembly was prototyped: free, but not sufficient
+
+**Cost: none.** Storing both directions of each result edge, twin at `e ^ 1`,
+and replacing the backward ray search with the half-edge rotation rule measured
+**157.9M cycles against 157.3M** on `parcels-union-4040`, with byte-identical
+output. The ray count does not change — the current form already stores two rays
+per undirected edge — and each ray shrinks from an 8-byte record to a `u32`,
+while `next` becomes one lookup instead of a scan. Speed is not the obstacle.
+
+**It does not fix the defect.** With pairing, every half-edge has exactly one
+successor and the successor map is a permutation, so every walk closes and
+`NodingFailure` disappears. But on the two-rectangle case the result came back
+as **0 polygons instead of 17.70** — every traced ring classified as a hole. The
+loud failure became a silent wrong answer, which for this library is strictly
+worse. The single-square buffer stayed correct (15.1365), and the L-shape
+erosion became correct (0.0), so it is not uniformly wrong either.
+
+That is the useful result: **pairing is necessary but not sufficient.** It makes
+the walk survive an inconsistent labelling instead of catching it. The defect is
+upstream, in what `resolve`/`enter` mark as a transition, and it has to be fixed
+there first. Pair afterwards, for free, to make degree balance structural.
+
+Prototype kept out of the tree deliberately; reproduce it from this note.
+
+### Where the labelling goes wrong, exactly
+
+Instrumented the two-rectangle case at `quadrant_segments = 1`, which fails the
+same way as 16 and is small enough to read. The buffer overlay produces **12
+chosen edges over 13 vertices, with exactly two imbalanced**:
+
+```
+IMBALANCE v5 (1,2) in=0 out=1
+IMBALANCE v6 (1,3) in=1 out=0
+```
+
+The edge **(1,3) → (1,2) is missing** — the left side of the second rectangle's
+offset curve. Its transition resolved to 0, so it was never chosen. Every other
+edge of both curves is present and correctly signed.
+
+The geometry is a **T-junction**: rectangle 1 `(0,0)-(2,1)` buffered by 1 has its
+top edge along `y = 2`; rectangle 2 `(2,2)-(3,3)` buffered by 1 has its left edge
+along `x = 1` running from `y = 2` up to `y = 3`. They meet at exactly `(1,2)`,
+one curve's endpoint landing on the other curve's interior. The segment above
+that junction is outside rectangle 1's buffer and must be kept; it is dropped.
+
+The failure reproduces at every `quadrant_segments` from 1 to 16, so it is not an
+arc-resolution artifact.
+
+### What `below` actually means
+
+Derived from the code and confirmed by tracing, after five failed repairs. Write
+this down before touching it again.
+
+**`below` is a snapshot over the segment's own span, and it must survive
+removals.** It is the winding beneath the segment when it was inserted, and
+`resolve` reads it back at the closing event. Making it live — decrementing when
+a segment underneath is removed — destroys exactly the information `resolve`
+needs, because the segments under it routinely close in the *same batch*. Traced
+on two disjoint rectangles: the bottom edge closes first, the decrement strips
+its `+1`, and the top edge then resolves with `below = {0,0}` where the
+rectangle's interior should give `{1,0}`. Its transition comes out 0 and the
+whole top edge vanishes. Every one of the 23 tests fails this way.
+
+**Two relations are in play and they are not the same** — but this is *not* the
+cause of the known failures. `enter` walks down past everything the new segment
+`shares` with (collinear and overlapping in more than a point) and excludes that
+run from `below`; `resolve` sums back only the run it `sameSegment`s with
+(identical endpoints). `sameSegment` implies `shares` but not the reverse, so a
+partial collinear overlap would have its delta excluded and never restored.
+
+That asymmetry is real and worth closing on its own. It is **not** what breaks
+the buffer. Instrumented at every `resolve`, counting neighbours that `shares`
+without `sameSegment`:
+
+| case | result | partial | exact |
+| --- | --- | ---: | ---: |
+| union, shared edge | ok | 0 | 1 |
+| buffer +1, the failing case | `NodingFailure` | **0** | **0** |
+| buffer -1.25, L-shape | `NodingFailure` | **0** | **0** |
+| buffer +1, single square | ok | 0 | 0 |
+
+**The failing cases contain no coincident segments at all.** Coincidence is a
+red herring for them; the remaining suspect is the T-junction, where a vertex of
+one curve lands on the interior of another's edge and the vertical segment above
+it opens and resolves in nearby batches.
+
+**Insert-only maintenance double-counts.** Keeping the snapshot through removals
+but folding each newly inserted segment into the windings above it gives
+`below = {2,0}` where `{1,0}` is right, so the interaction with `enter`'s own
+run-summation is not a simple addition either.
+
+### Five fix attempts that did not work
+
+`Event.below` is the winding cached beneath a segment **when it was inserted**,
+and `resolve` reads it back at the closing event. The obvious theory is
+staleness: a segment inserted *underneath* an active one changes what is beneath
+it, and the cached value never learns. `resolve`'s own comment half-admits this
+for coincident bundles.
+
+Acting on that theory failed three times, each breaking 16 of 23 tests:
+
+1. Maintaining `below` incrementally — add the newcomer's delta to every
+   segment above on insert, subtract on remove.
+2. The same, but starting above the coincident run rather than at the next
+   index, since `enter` steps over a bundle and `resolve` sums it separately.
+3. A pure diagnostic: ignore the cache entirely and recompute the winding below
+   by walking the whole status line at resolve time. Obviously correct under the
+   prefix-sum model, far too slow to ship, and it **still broke the same 16
+   tests**.
+4. Redefining `below` as live and absolute — winding strictly below in status
+   order, maintained on both insert and remove — with `resolve` reading the two
+   ends of the run instead of re-summing. Broke all six union cases, including
+   two rectangles that do not touch at all.
+5. The same, but shifting only on insert. `below = {2,0}` where `{1,0}` is
+   correct.
+
+The useful part is the diagnosis above, not the attempts. A repair has to satisfy
+three constraints at once: survive removals within a batch, reconcile `shares`
+with `sameSegment`, and not double-count against `enter`'s run summation. None of
+the five did all three.
+
+### What JTS does instead, read from the source
+
+`node_modules/jsts` is the JTS algorithm in readable JavaScript. Two things in
+`operation/buffer/BufferBuilder.js` are worth copying, and one is worth copying
+*first*.
+
+**1. Noding and labelling are separate passes, and noding finishes first.**
+
+```js
+this.computeNodedEdges(bufferSegStrList, precisionModel)
+this._graph = new PlanarGraph(new OverlayNodeFactory())
+this._graph.addEdges(this._edgeList.getEdges())
+const subgraphList = this.createSubgraphs(this._graph)
+this.buildSubgraphs(subgraphList, polyBuilder)
+```
+
+Nothing is labelled until every edge exists. qdgeo interleaves the two: a
+segment's transition is decided at its closing event, from state captured at its
+opening event, while the sweep is still discovering geometry. That is the
+structural difference, and it is why a repair has to satisfy three constraints at
+once instead of none.
+
+**2. Duplicate edges are merged before labelling, not reconciled during it.**
+
+```js
+insertUniqueEdge(e) {
+  const existingEdge = this._edgeList.findEqualEdge(e)
+  if (existingEdge !== null) {
+    let labelToMerge = e.getLabel()
+    if (!existingEdge.isPointwiseEqual(e)) { labelToMerge = new Label(e.getLabel()); labelToMerge.flip() }
+    existingLabel.merge(labelToMerge)
+    existingEdge.setDepthDelta(existingEdge.getDepthDelta() + BufferBuilder.depthDelta(labelToMerge))
+  } else { ... }
+}
+```
+
+`findEqualEdge` keys on an `OrientedCoordinateArray` over the edge's *whole*
+coordinate list, so it only ever matches exact duplicates — and that is enough,
+because the noder has already split every collinear overlap into pieces that are
+either identical or disjoint. One edge per geometric location, carrying the
+summed delta. There is no `shares`-versus-`sameSegment` question to get wrong
+because coincidence does not survive into the labelling stage.
+
+That is the fix for the asymmetry above: **merge coincident segments at
+subdivision time and sum their deltas**, rather than carrying a run through the
+status line and reconciling at `resolve`. It will not fix the known failures —
+they contain no coincident segments — but it removes a whole class of latent
+divergence and simplifies `enter` and `resolve` to the point where the remaining
+bug is easier to see.
+
+**3. Depth is seeded by ray casting, once per subgraph.**
+`buildSubgraphs` takes each subgraph's rightmost coordinate, asks
+`SubgraphDepthLocater` for the depth there by counting the subgraphs already
+placed, then `computeDepth` propagates across the whole subgraph and
+`findResultEdges` keeps the 0/1 crossings. The seed is a single global fact; the
+rest is propagation over a finished graph. Nothing depends on insertion order.
+
+### Cost of adopting the JTS approach, measured before building it
+
+JTS builds its `PlanarGraph` over **every noded edge**, not just the ones that
+reach the result. Counting both on real workloads:
+
+| workload | noded segments | result segments | ratio |
+| --- | ---: | ---: | ---: |
+| `parcels-union-4040` | 133,523 | 2,636 | **50.7x** |
+| `complex-parcel-buffer` | 32,157 | 31,329 | **1.0x** |
+
+Assembly is currently ~2.6% of runtime measured over the *result* edges. Scaling
+it by those ratios means:
+
+- **Buffers: essentially free.** Almost every noded segment is already a result
+  segment, so graph-based labelling costs nothing extra — and buffers are where
+  the defect is.
+- **Unions: roughly doubles the total.** 50x the assembly work on a stage that is
+  2.6% lands near 130% of current runtime. That is very likely why GEOS takes
+  447 ms on this union against qdgeo's 156 ms while being comparable elsewhere.
+
+So "node fully, merge duplicates, label over the graph" is **cheap exactly where
+it is needed and expensive exactly where the current design already works**
+(0 failures in ~120k boolean operations). The obvious shape is to graph-label
+only when the result/noded ratio is high, but two labelling paths means two
+chances to be wrong, and the streaming path would still own the union case.
+
+### Two labelling paths: measured, and the split is not "buffer vs boolean"
+
+The ratio across all 26 workloads is not an operation property, it is a
+**cancellation** property:
+
+| workload | ratio | |
+| --- | ---: | --- |
+| `parcels-union-4040` | 50.7x | adjacent parcels, boundaries cancel |
+| `parcels-union-1000` | 15.8x | |
+| `parcels-union-100` | 11.1x | |
+| `parcels-buffer-100-*` | 2.9-3.4x | **a buffer, but the cost is its internal union pass** |
+| `complex-parcel-buffer-*` | 1.0x | offset curves barely cancel |
+| single-shape buffers, small unions | 1.0-2.2x | |
+
+So `parcels-buffer-100` is a buffer at 3x, not 1x: `bufferInput` unions its input
+first, and that pass is the expensive kind. Splitting per *operation* would put
+graph labelling on exactly the wrong pass.
+
+**This turned out to be the wrong conclusion, and measurement is what said so.**
+Splitting per overlay call assumes the choice can be made from the call site.
+It cannot: what decides is whether *this particular arrangement* came out fully
+noded, which nothing upstream knows. See "What shipped" below — it is a
+fallback, not a split.
+
+### Bundle cost, measured
+
+A structurally representative pass — union-find components, rightmost-vertex
+ray-cast seed, BFS depth propagation, fill-change selection — compiled into the
+WASM artifact and made genuinely reachable:
+
+| | raw | gzipped |
+| --- | ---: | ---: |
+| baseline | 115,995 | 44,874 |
+| with the graph pass | 119,578 | 46,117 |
+| **delta** | **+3,583** | **+1,243 (+2.8%)** |
+
+95 lines, so about **38 bytes raw and 13 bytes gzipped per line** of Zig at
+`ReleaseSafe`. A complete implementation is perhaps twice that skeleton, so
+budget **3 KB gzipped, around +6%**, taking the artifact from 44.6 KB to roughly
+47.5 KB.
+
+The finished pass costs about three times that skeleton:
+
+| | raw | gzipped |
+| --- | ---: | ---: |
+| baseline | 115,995 | 44,874 |
+| shipped | 126,758 | 49,430 |
+| **delta** | **+10,763 (+9.3%)** | **+4,556 (+10.2%)** |
+
+About 10 KB of that was duplication, found by measuring: `Spoke` / `Spokes` were
+`Ray` / `Radial` under other names, and instantiating a second `std.sort.pdq`
+over an identical struct cost ~10 KB raw on its own. Sharing one radial
+comparator and keying the duplicate-merge map on the `u128` the vertex map
+already uses took the delta from +20,296 / +7,351 down to the figures above.
+
+### What shipped (2026-09-14)
+
+`sweep.execute` now tries the sweep's own labelling and **retries the whole
+overlay with the graph labelling when the first attempt returns
+`NodingFailure`**. Callers see one function with the signature it always had;
+`operations.zig` passes no mode and neither ABI exposes one.
+
+Why a fallback and not a split:
+
+| workload | `.sweep` only | `.graph` only | fallback |
+| --- | --- | --- | --- |
+| 57,990 cluster buffers (2-16 parcels, 5 distances, q = 1/4/16) | 10 fail | 6 fail | **6 fail**, +2.9% time |
+| 3,946 cluster unions | 4 fail | 4 fail | **4 fail**, no cost |
+| 315,120 single-parcel buffers | 0 fail | 0 fail | 0 fail |
+| `parcels-union-4040` | passes | **fails** | passes |
+| two rects `+1`, L-shape `-1.25` | **fail** | pass | pass |
+
+Neither labelling dominates, so neither can be pinned at a call site. Order is
+decided by `parcels-union-4040`: `.graph` cannot label it at all, and running
+`.graph` first would also pay a second pass on every call that never needed one.
+Running it second costs nothing except on inputs that already had no answer.
+
+Both minimal reproductions above now match GEOS exactly — 16.0 and
+17.704822735818908 for the two rectangles at `q = 1` and `q = 16`, and empty for
+the eroded L — and are pinned in `src/tests.zig`.
+
+### Why `.graph` cannot label the 4,040-parcel union
+
+Because that arrangement is not fully noded, and a wedge model assumes it is.
+Reduced to **five parcels** by delta debugging against the oracle "sweep passes
+and graph fails", then instrumented: 63 segments, 57 after duplicate merging,
+52 vertices, **3 unnoded crossings**, 0 partial collinear overlaps, 0 vertices
+of degree 1. Every one of the three is the same shape — a vertex pair about
+2e-9 apart, where the sweep split one segment at a computed crossing and the
+rounded split point landed off the other segment's line:
+
+```
+(6233.019441406742,-1529.5273384991378)-(6233.964433039578,-1630.3343262662754)
+  crosses
+(6233.964433037561,-1630.3343262662754)-(6233.964433039578,-1630.3343262662609)
+```
+
+This is the failure GEOS answers with snap-rounding, which qdgeo does not do.
+The sweep's own labelling survives it because it never builds a planar
+arrangement: it reads the transition off the status line, whose order stays
+self-consistent whether or not the geometry agrees.
+
+### Three bugs the graph pass had, and what each cost
+
+Each was found by a failing test, not by reading:
+
+1. **Seeded at the wrong place.** Seeding any vertex makes the ray cast
+   ambiguous. Seeding each connected component's *rightmost* vertex makes it
+   exact, because nothing of that component reaches past it.
+2. **Signed the wedge step by the wrong axis.** Crossing a segment
+   counter-clockwise is *upward* when the segment's counter-clockwise normal
+   points up — which is a test on the direction's **x** component, not its y.
+3. **Gave the transition to the wrong member of a coincident run.** `enter`
+   records `prev` as the status entry below a run, so the nesting walk only ever
+   lands on a run's topmost member. `resolve` marks that one `carries`; the
+   graph pass has to agree, or `below` comes back `none` and nesting fails.
+   This one cost three of the four test failures the first working version had.
+
+And one fix that was not a bug in either pass: merging coincident edges before
+labelling, JTS's `insertUniqueEdge`. Without it two duplicates leave a
+zero-width wedge between them and the winding either side is wrong.
+
+### Hotspots, re-profiled 2026-09-14
+
+`rdtsc` per phase, native `ReleaseFast`, min of 7. The two workload shapes share
+almost nothing:
+
+| phase | `parcels-union-4040` | `complex-parcel-buffer +2` |
+| --- | ---: | ---: |
+| build + sort events | 28% | 25% |
+| sweep | **70%** | 37% |
+| select result segments | 1% | 4% |
+| vertex dedup | 0.2% | **23%** |
+| radial fan | 0.1% | 4% |
+| link, trace, nest, output | 0.4% | 9% |
+
+The split is the result/noded ratio again: a union keeps 2,636 of 133,523 noded
+segments, a buffer keeps 31,329 of 32,157. Everything downstream of the sweep is
+free on one and a third of the run on the other.
+
+**Vertex dedup was the buffer's second-largest phase and is now fixed.** Three
+changes, in order of size: size the map for its upper bound and use
+`getOrPutAssumeCapacity` so it never rehashes or grows; one probe instead of a
+`get` then a `put`; and a hash built from `keyOf`'s already-mixed bits instead of
+Wyhash over sixteen bytes. Measured `ReleaseSafe` native, median of 9:
+
+| workload | before | after | |
+| --- | ---: | ---: | ---: |
+| `complex-parcel-buffer +2` | 41.23 ms | 30.44 ms | **1.35x** |
+| `complex-parcel-buffer -2` | 39.32 ms | 29.15 ms | **1.35x** |
+| `parcels-buffer-100 +2` | 1.36 ms | 1.10 ms | **1.24x** |
+| `parcels-union-100` | 0.95 ms | 0.85 ms | 1.12x |
+| `parcels-union-4040` | 117.64 ms | 114.64 ms | 1.03x |
+| 57,990 cluster buffers | 28.2 s | 20.6 s | **1.37x** |
+
+Artifact cost of the whole change set: 129.6 KB raw / 50.1 gzipped to
+**134.6 / 50.8**.
+
+**The radial sort is a red herring.** Every vertex of a buffer's boundary and
+95% of a union's has degree two, which looks like free money; replacing `pdq`
+with one comparison there is worth 8% of a 4% phase. Measure which stage is the
+cost before optimising the one that looks obviously wasteful.
+
+#### Still open, in order of size
+
+- [ ] **The sweep is 70% of a union and 37% of a buffer**, and nothing since the
+      exact-predicate filter has moved it. That is where any further union win
+      has to come from.
+- [ ] **Build + sort is 25-28% of both.** Already had its 3.4x (reserve) and
+      2.4x (bucket) wins; a third is not obviously there.
+- [ ] `trace` is 7% of a buffer — the minimal-ring extraction walking 31k edges.
+
+### Duplication pass, 2026-09-14
+
+A repeated-block scan over `src/*.zig` at a six-line window now reports nothing.
+What it found and what replaced it:
+
+| was | now |
+| --- | --- |
+| `Spoke` / `Spokes`, a rename of `Ray` / `Radial` | one `Ray` / `Radial` |
+| the same 21-line CSR-plus-radial-sort inline in ring assembly and in `relabel` | `Fan.build` |
+| the same 14-line build-sort-sweep block in `overlay` and `renodeOnce` | `load` |
+| `Edge.from`/`.to` plus a parallel `pairs` array of the same values | `Edge.ends` |
+| `relabel`'s own `group` and `carrier` arrays | `Edge.event` |
+| a free `vertex()` over a loose map-plus-list pair, twice | `Vertices` |
+| `geom_clear` repeating `releaseResults` | `geom_clear` calls it |
+
+Duplicating a type in `sweep.zig` is not free and the numbers are worth quoting:
+a second `std.sort.pdq` instantiation cost ~10 KB raw, and a second hash-map
+shape cost 8.8 KB raw and 2.5 KB gzipped. Both were found by measuring the
+artifact after the change, not by reading.
+
+Left alone deliberately: `eventLess` and `segmentLess` share a three-line
+prelude and a two-line tie-break, and their comments turn on the two agreeing in
+a specific way. Factoring the shared lines out would hide the relationship that
+makes them correct.
+
+### Iterated noding: measured, and it shipped
+
+The 6 remaining cluster-buffer failures and the figure-eight line buffer were
+**under-noded, not mislabelled**: one sweep of the arrangement the first sweep
+produced finds the crossings rounding had moved, and all seven then assemble.
+`execute` now does exactly that after both labellings fail.
+
+| | before | after |
+| --- | --- | --- |
+| 57,990 cluster buffers | 6 fail | **0 fail** |
+| figure-eight line buffer | fails | **matches GEOS**, 4.2689251551415985 |
+| 3,946 cluster unions | 4 fail | 4 fail |
+
+Cost, measured on the failing inputs at `ReleaseSafe` (median of 9):
+
+| case | no retry | one pass | outcome |
+| --- | ---: | ---: | --- |
+| `buf-k8-s1280-d5-q1` | 0.27 ms | 0.89 ms | rescued |
+| `buf-k16-s1280-d5-q16` | 2.46 ms | 4.05 ms | rescued |
+| `uni-k64-s256` | 2.04 ms | 4.65 ms | still fails |
+| `uni-k256-s3072` | 70.63 ms | 177.94 ms | still fails |
+
+**A call that succeeds pays nothing** — the retry is after the first attempt
+returns — so the corpus wall time did not move (28.2 s against 29.7 s for
+57,990 cluster buffers, inside run-to-run noise). Artifact cost: 126.8 KB raw /
+49.1 KB gzipped to **129.6 / 50.1**.
+
+Rescued buffers agree with GEOS to about `5e-11` relative area.
+
+### Why the 4 cluster unions cannot be fixed by noding at all
+
+They are already at a **noding fixpoint**: 847 segments in, 847 out, pass after
+pass, with no growth at any iteration up to 8. Instrumented at the fixpoint,
+each holds exactly **1 crossing, and it is unsplittable** — the exact
+intersection, rounded to f64, lands on or past an endpoint of one of the two
+segments. `divide` refuses it and is right to: putting a vertex there would move
+the crossing off the other segment's line. No iteration count reaches it.
+
+`Engine.lost` counts these during the sweep, and `execute` now raises
+`error.UnnodableCrossing` rather than `NodingFailure` when any were seen. Both
+map to ABI status 5, so nothing host-visible changed, but the Zig-level error
+now separates a precision limit from a bug.
+
+Its value as a *predictor* was tested and is not good enough to act on:
+
+| | lost > 0 | lost = 0 |
+| --- | ---: | ---: |
+| call failed | 4 | 6 |
+| call succeeded | 1 | 61,925 |
+
+The 4 are exactly the hopeless unions and the 6 exactly the rescuable buffers,
+which looks like a perfect gate. It is not: the figure-eight buffer has a lost
+crossing **and** is rescued by the re-noding pass. Gating the retry on `lost`
+was implemented, measured, and reverted — it trades a real answer for time on
+calls that error either way.
+
+- [ ] **The 4 cluster-union failures.** Only snapping can close an unsplittable
+      crossing: the two near-coincident vertices have to become one. That is the
+      policy question in `docs/BUFFER_APPROACH.md`, not an algorithm gap, and it
+      is 0.1% of cluster unions — the 4,040-parcel union itself is unaffected.
+
+Two other symptoms trace to the same defect and will close with it:
+
+- Buffering a closed LineString with **zero signed area** (a figure eight)
+  fails. Splitting it into two open chains was tried and changes nothing — each
+  chain buffers correctly alone and the pair fails when overlaid.
+- `deduplicate` and the zero-ring guard in `bufferInput` fixed two *other*
+  buffer failures found in the same review; those are done and tested.
 
 ### Not blockers
 
 - [ ] **Trim two binary searches per event from the sweep.** Batching added a
       `statusFind` per opened event and a `statusSeek` inside `divide`. Both
       indices are known at the call sites. Performance only.
+
+## Making the performance instrumentation Zig-native
+
+Every timing number in this file was produced by a throwaway Zig program with an
+`rdtsc` counter, written and deleted each time. That is the part worth making
+permanent. The rest of the Python is not about performance at all.
+
+**Split the two concerns first.** 747 lines of Python do two unrelated jobs:
+
+| job | files | can it be Zig? |
+| --- | --- | --- |
+| measure qdgeo's own speed | (none — ad-hoc probes) | **yes, easily** |
+| compare answers against other implementations | `run.py`, `probes.py`, `jts/run.py` | no, and it should not be |
+
+The comparison harness exists to run GEOS, JSTS, Turf, polyclip-ts and Rust Geo.
+Those are Python and JavaScript by nature. Reimplementing the oracle in Zig would
+mean grading our own homework.
+
+### Low effort, high value: `zig build bench`
+
+A permanent benchmark step reading a committed binary fixture and reporting
+per-phase cycles. Roughly **150 lines and an afternoon**:
+
+- `build.zig` step plus a `src/bench.zig` root — the probe shape used all
+  session: `lfence; rdtsc`, min of N runs, per-phase counters behind a comptime
+  flag so the shipped build carries none of it.
+- Fixture as a flat block on disk, `@embedFile`d. The parcel dataset is 135,080
+  coordinates, so ~2.2 MB. Generate it once from the GeoParquet with the existing
+  Python and commit it, or write it next to the download in `fetch.py`.
+- Output: cycles per phase (build, sort, sweep, assemble), which is what every
+  optimisation in this file was judged on.
+
+This removes Python from the performance loop entirely and makes the numbers
+reproducible by `zig build bench` rather than by reconstructing a probe.
+
+### Medium effort: the JTS runner
+
+`tests/jts/run.py` is 311 lines and needs only two things from Python: a WKT
+parser and a topological equality test. A Zig WKT reader is ~300 lines for the
+2D types qdgeo supports. Equality is harder — it currently delegates to GEOS,
+and replacing it with area plus Hausdorff in Zig is another ~200 lines and a
+weaker check. **About a week, and it trades away GEOS as the arbiter.** Not
+obviously worth it; the JTS cases are already vendored, so the suite reproduces
+anywhere Python exists.
+
+### Not advisable: the differential suite
+
+`prepare.py` also reads GeoParquet (`pyarrow`) and reprojects (`pyproj`), neither
+of which has a mature Zig equivalent, and `run.py`'s adjudicator needs exact
+rational arithmetic (`fractions.Fraction`) that Zig's standard library does not
+provide. Porting that is weeks of work to remove a dependency that only test
+tooling has.
+
+**Recommendation:** do `zig build bench`, leave the rest. The benefit is not
+fewer languages — it is that a performance claim becomes a command anyone can
+run, instead of a probe that has to be rebuilt from a note.
 
 ## Stale documentation
 

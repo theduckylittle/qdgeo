@@ -6,7 +6,7 @@ written in Zig and compiled to WebAssembly.
 qdgeo does five things: union, intersection, difference, symmetric difference,
 and rounded buffer. The buffer is also available as an option on the four
 boolean operations, so "subtract this, then grow the result by 5 m" is one call.
-That is very nearly all the geometry a web mapping application asks for. The WASM artifact is **112 KB raw, 43.9 KB gzipped**,
+That is very nearly all the geometry a web mapping application asks for. The WASM artifact is **135 KB raw, 50.8 KB gzipped**,
 declares no imports, and has no C or C++ dependency.
 
 > **Still experimental.** The test suites are green — 26 of 26 differential
@@ -18,12 +18,12 @@ declares no imports, and has no C or C++ dependency.
 
 | | size gzipped | speed | correct | operations bundled |
 | --- | ---: | ---: | ---: | --- |
-| **qdgeo** | **43.9 KB** | **1.00x** | **26 / 26** | four booleans, buffer |
-| polyclip-ts | 15.4 KB | 31.3x | 10 / 12 | four booleans, **no buffer** |
-| JSTS | 73.9 KB | 6.9x | 24 / 26 | four booleans, buffer |
-| Turf | 82.3 KB | 21.8x | 23 / 26 | union, buffer |
-| Rust Geo | 102.1 KB | 0.75x | 18 / 26 | union, buffer |
-| GEOS | 778 KB † | 1.39x † | 26 / 26 | all of GEOS |
+| **qdgeo** | **50.8 KB** | **1.00x** | **26 / 26** | four booleans, buffer |
+| polyclip-ts | 15.4 KB | 28x | 10 / 12 | four booleans, **no buffer** |
+| JSTS | 73.9 KB | 7.1x | 24 / 26 | four booleans, buffer |
+| Turf | 82.3 KB | 17x | 23 / 26 | union, buffer |
+| Rust Geo | 102.1 KB | 0.80x | 18 / 26 | union, buffer |
+| GEOS | 778 KB † | 1.5x † | 26 / 26 | all of GEOS |
 
 Speed is the geometric mean against qdgeo over each engine's **correct**
 workloads; lower is faster. Size is what a browser downloads — JavaScript
@@ -129,12 +129,13 @@ The shipped WASM keeps its runtime safety checks. They are close to free:
 
 | | raw | gzipped | speed | output |
 | --- | ---: | ---: | ---: | --- |
-| `ReleaseSafe` (shipped) | 112 KB | 43.9 KB | 1.00x | — |
-| `ReleaseFast` | 127 KB | 44.9 KB | 1.11x | bit-identical |
+| `ReleaseSafe` (shipped) | 135 KB | 50.8 KB | 1.00x | — |
+| `ReleaseFast` | 135 KB | 48.3 KB | 1.11x | bit-identical |
 
-`ReleaseFast` is 11% faster and 15 KB larger, and produces byte-for-byte
-identical geometry across all 26 workloads. `ReleaseSmall` reaches 65 KB raw and
-28 KB gzipped if size ever matters more than either.
+`ReleaseFast` is 11% faster, the same size raw and 2.5 KB smaller gzipped, and
+produces byte-for-byte identical geometry across all 26 workloads.
+`ReleaseSmall` reaches 73 KB raw and 32.6 KB gzipped if size ever matters more
+than either.
 
 ## The parcel dataset
 
@@ -155,7 +156,14 @@ so the numbers below reproduce on any machine.
 ## Benchmarks
 
 Every engine runs the same parcel dataset over 26 workloads covering all four
-boolean operations and buffer. Medians of 11 runs on one machine.
+boolean operations and buffer. Every figure is the **median of three independent
+suite runs, each itself a median of 11 repeats**, on one idle machine.
+
+Three runs because one is not reproducible enough to publish: between two clean
+runs the JavaScript engines' geometric means moved by up to 31%, and Turf's
+smallest cases by 300%, which is JIT warmup rather than anything about the
+geometry. qdgeo, GEOS and Rust Geo stayed within 11%. Ratios are quoted to two
+significant figures because the third is noise.
 
 **A wrong answer is not a fast answer.** Where an engine returns the wrong
 geometry its time is marked †, and it is excluded from every average. Rust Geo
@@ -193,10 +201,10 @@ Milliseconds. † marks a wrong answer.
 
 | parcels | qdgeo wasm | qdgeo native | GEOS | Rust Geo | JSTS | Turf | polyclip-ts |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 0.18 | 0.14 | 0.35 | 0.04 † | 10.2 | 3.10 | 5.39 |
-| 100 | 2.12 | 1.36 | 4.08 | 0.19 † | 41.0 | 21.5 | 22.9 |
-| 1,000 | 21.5 | 20.2 | 66.9 | 2.53 † | 479 † | 437 † | 452 † |
-| 4,040 | 160 | 144 | 452 | 14.3 † | 3566 † | 3843 † | 3823 † |
+| 10 | 0.32 | 0.12 | 0.28 | 0.052 † | 14.6 | 3.01 | 5.96 |
+| 100 | 1.49 | 1.15 | 4.11 | 0.37 † | 44.2 | 24.4 | 25.9 |
+| 1,000 | 20.3 | 16.8 | 65.7 | 2.63 † | 533 † | 495 † | 513 † |
+| 4,040 | 160 | 130 | 426 | 14.5 † | 3640 † | 3710 † | 3770 † |
 
 On the two largest unions, only qdgeo and GEOS return the right geometry.
 
@@ -204,14 +212,11 @@ On the two largest unions, only qdgeo and GEOS return the right geometry.
 
 | case | qdgeo wasm | GEOS | Rust Geo | JSTS | Turf |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 parcel, +2 m | 0.06 | 0.08 | 0.08 | 0.64 | 2.47 |
-| 100 parcels, +2 m | 1.40 | 4.74 | 0.36 | 36.0 | 29.8 |
-| 100 parcels, -10 m | 1.65 | 4.73 | 0.51 † | 36.0 | 37.1 |
-| 19,208-coordinate parcel, +2 m | 40.5 | 8.88 | 54.7 | 29.1 | 89.5 |
-| 19,208-coordinate parcel, -2 m | 38.4 | 14.3 | 70.0 | 29.0 | 83.1 |
-
-GEOS is 3-4x faster at buffering a single very complex polygon, because JTS
-snap-rounds the offset curve instead of noding it exactly.
+| 1 parcel, +2 m | 0.046 | 0.057 | 0.034 | 0.35 | 1.17 |
+| 100 parcels, +2 m | 1.30 | 4.54 | 0.35 | 32.7 | 29.5 |
+| 100 parcels, -10 m | 1.46 | 4.36 | 0.51 † | 32.9 | 30.2 |
+| 19,208-coordinate parcel, +2 m | 33.2 | 8.25 | 53.2 | 29.1 | 90.0 |
+| 19,208-coordinate parcel, -2 m | 31.9 | 13.0 | 66.8 | 28.7 | 82.7 |
 
 ### Overall
 
@@ -220,12 +225,16 @@ only. Above 1.00 is slower than qdgeo.
 
 | | speed | workloads averaged | excluded as wrong |
 | --- | ---: | ---: | --- |
-| Rust Geo | 0.75x | 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
-| **qdgeo (wasm)** | **1.00x** | 26 | none |
-| GEOS (native) | 1.39x | 26 | none |
-| JSTS | 6.9x | 24 | 2 parcel unions |
-| Turf | 21.8x | 23 | 2 parcel unions, 1 buffer |
-| polyclip-ts | 31.3x | 10 | 2 parcel unions |
+| Rust Geo | 0.80x | 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
+| **qdgeo wasm** | **1.00x** | 26 | none |
+| GEOS native | 1.5x | 26 | none |
+| JSTS | 7.1x | 24 | 2 parcel unions |
+| Turf | 17x | 23 | 2 parcel unions, 1 buffer |
+| polyclip-ts | 28x | 10 | 2 parcel unions |
+
+Across the three runs those means spanned 0.76-0.84, 1.36-1.62, 7.10-8.20,
+14.7-19.3 and 24.3-29.1 respectively. Treat them as one significant figure of
+real information each.
 
 Timing boundaries are not equal across engines. qdgeo and Rust Geo are the only
 matched pair: both WASM, same Node process, same flat ABI. GEOS is native and
@@ -253,6 +262,9 @@ progressively coarser snap-rounded grids before giving up.
 | Precision option | none | fixed precision models |
 | When it answers | the answer is exact | the answer may be snapped |
 
+The "noding failure" row is not only about bad geometry — it is also the one
+case where **valid** input can fail. See the next section.
+
 That is why they answer where qdgeo errors. It is also why a snapped result
 answers a slightly different question than the one you asked.
 
@@ -263,6 +275,43 @@ why the vertex error above reads `0 m`. The two are the same decision.
 where the caller knows what the data is meant to represent. Shapely's
 `make_valid`, PostGIS's `ST_MakeValid`, and JTS's `GeometryFixer` all do this
 well, and qdgeo does not try to compete with them.
+
+## When valid input fails
+
+Rarely, qdgeo returns an error for geometry that is perfectly valid. Measured on
+the parcel dataset: **4 of 3,946 unions of adjacent-parcel clusters, and 0 of
+57,990 cluster buffers**. The full 4,040-parcel union is not affected.
+
+The cause is a crossing that `f64` cannot hold. Two segments cross, the exact
+intersection is computed, and rounding it to the nearest `f64` puts it on or
+past an endpoint of one of them. Placing a vertex there would move the crossing
+off the other segment's line, so qdgeo declines to place one, and the
+arrangement has a crossing with no node on it. Adding more noding passes does
+not help: the geometry is already at a fixed point. Only snapping the two
+near-coincident vertices together would close it, and that is the trade this
+library has already declined.
+
+**What this means for a caller.**
+
+- It is an error, never a wrong answer. qdgeo does not return geometry it could
+  not verify.
+- It is reported as ABI status `5`, the same code as malformed input. A host
+  that wants to tell the two apart has to check its input separately for now.
+  The native Zig API is more specific: `error.UnnodableCrossing` rather than
+  `error.NodingFailure`.
+- Retrying the identical call will fail identically. It is deterministic.
+- Nudging the input helps, because the failure depends on one pair of nearly
+  coincident vertices: simplifying with a tolerance a few orders of magnitude
+  above the coordinates' precision, or rounding coordinates to a grid you are
+  willing to accept, usually moves past it. Both change the answer slightly,
+  which is why qdgeo will not do either on your behalf.
+- Splitting work into smaller batches makes this **more** likely, not less. Each
+  overlay call carries the exposure independently, and a subset's geometry is
+  not easier than the whole. Unioning the 4,040 parcels in batches of 250 hit
+  four failures; in batches of 500 or 1,000, none, with a bit-identical result.
+
+If you need an answer for every input more than you need an exact one, GEOS and
+JTS snap-round and will return something here.
 
 ## The JTS test suite
 
@@ -336,6 +385,10 @@ Single-threaded and non-reentrant:
 Status: 0 success, 1 allocation error where recoverable, 2 unsupported geometry,
 3 count/point limit, 4 precision/range error, 5 malformed geometry or overlay
 failure, 6 invalid options.
+
+Status `5` covers both "this geometry is malformed" and "this arrangement is not
+representable in `f64`" — see [When valid input fails](#when-valid-input-fails),
+which is rare but happens to input that is entirely valid.
 
 ### WKB, native only
 
