@@ -70,3 +70,33 @@ jobs:
           # so --strict would always trip. Gate on the baseline instead: a drop
           # below it is a regression, and raising it is a deliberate commit.
           python tests/jts/run.py --expect 155
+
+  # Zig has no stable 0.17 yet, and master breaks things on purpose. This job
+  # says *when* that happens rather than leaving it to be discovered during an
+  # upgrade, and it does not block a PR: a red cross here means upstream
+  # changed, not that the branch is wrong.
+  nightly:
+    name: Zig master (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: master
+
+      - name: Version
+        run: zig version
+
+      - name: Unit tests
+        run: zig build test
+
+      - name: Build every target
+        run: |
+          zig build
+          zig build wasm
+          zig build run
+
+      - name: Zig formatting
+        run: zig fmt --check build.zig src
