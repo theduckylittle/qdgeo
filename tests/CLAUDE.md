@@ -65,6 +65,14 @@ enough to change conclusions — qdgeo and Rust Geo are the only symmetric pair.
 Every reduced failure is committed under `fixtures/` and re-probed by
 `probes.py`. Everything under `generated/` is gitignored build output.
 
+## Updating the published comparison
+
+Use the **`compare` skill** (`.claude/skills/compare/`). It encodes the two
+rules that are easy to get wrong: speed is averaged only over each engine's
+*correct* workloads, and a report must never be read without checking the run's
+exit code — a crashed run leaves the previous one in place and the stale numbers
+look entirely normal.
+
 ## What CI gates
 
 `.github/workflows/ci.yml` runs the Zig tests, all four build targets, the WASM

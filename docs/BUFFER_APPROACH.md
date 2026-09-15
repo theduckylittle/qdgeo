@@ -47,37 +47,82 @@ tolerances, none of which is optional:
 
 ## How this library differs
 
-The **depth machinery is already the same idea**: `depthDelta` is the winding
-delta each engine here carries per layer, and JTS's 0/1 crossing test is
-`filled()`. That part needs no change.
+The **depth machinery is the same idea**: `depthDelta` is the winding delta
+carried per layer here, and JTS's 0/1 crossing test is `filled()`. Curve
+construction is also the same now — one self-intersecting offset curve per ring,
+line and point, ported from JTS. A 19,208-coordinate parcel yields 7 curves and
+32,031 segments, 1.67x its input.
 
-Two things differ, and both matter.
+What still differs is **when the depth decision is made, and from what**.
 
-### 1. Curve construction
-
-| | JTS/GEOS | here |
+| | JTS / GEOS | qdgeo |
 | --- | --- | --- |
-| pieces per ring | 1 self-intersecting curve | 1 ring + one quad per edge + one sector per non-mitred vertex |
-| complex parcel (19,208 coords) | one curve | **10,857 closed paths, 55,846 segments** |
-| runtime, that parcel | 7 ms (GEOS) | 240 ms (WASM), 331 ms (native) |
+| when | after the whole noded graph exists | during the sweep, per segment |
+| from | one propagation over a finished `PlanarGraph` | `below`, a winding cached at the segment's opening event |
+| seeded by | a ray cast from each subgraph's rightmost coordinate through the subgraphs already placed (`SubgraphDepthLocater`) | the status line as it stood at two moments in time |
+| selection | `findResultEdges`, depth crossing 0/1 | `transition != 0` on each segment independently |
+| both directions of an edge | always, as `DirectedEdge` pairs | one, oriented by the transition |
 
-Every quad overlaps its two neighbours and every sector overlaps two quads, so
-the arrangement is dominated by mutual overlap that carries no information. That
-is the direct cause of both remaining buffer failures and of the one workload
-where this library is far slower than Turf.
+GEOS derives every edge's depth from a **single propagation over a structure that
+is already complete**, so the selected edges form a closed boundary by
+construction. qdgeo makes a **streaming, order-dependent decision per segment**
+and nothing checks that the union of those decisions closes until the contour
+walk runs off the end.
 
-### 2. Robustness policy
+That was the whole of the difference, and `sweep.execute` now closes it: it
+retries the overlay with a JTS-style graph labelling whenever the streaming one
+returns `NodingFailure`. See "Two labellings, one fallback" in `CLAUDE.md`. What
+survives the retry is a different problem — an arrangement that is not fully
+noded — described below.
 
-JTS and GEOS **do not** achieve robust buffering in floating point. They try, and
-on failure retry on progressively coarser snap-rounded integer grids, twelve
-times, before giving up. Everything above about "exact predicates" is orthogonal:
-their line intersector is bound to a precision model that rounds constructed
-points onto a grid.
+### Why it shows up in buffers and not booleans
 
-This library currently has no fallback. An exact-arithmetic failure is fatal, by
-the rule in `CLAUDE.md` that failures are errors rather than repairs. That rule
-is what leaves `parcel-buffer-wide` and `parcel-buffer-mitre` as hard errors
-where GEOS returns an answer.
+Measured over ~300,000 random valid inputs before the fallback: **0 failures
+across ~120,000 boolean operations, 190 across ~30,000 buffers**. Offset curves
+manufacture exact coincidences by construction — arcs meeting straight runs,
+curves from separate rings touching at a single point — at a density real parcel
+data never reaches. The streaming labelling is where two segments meeting at
+such a junction can be labelled from inconsistent snapshots.
+
+With the fallback, on 57,990 buffers of 2-to-16-parcel clusters across five
+distances and three arc resolutions: **10 failures become 6**. The graph
+labelling rescues every case the streaming one gets wrong *for labelling
+reasons*. The remaining 6 failed under both, because the arrangement still held
+crossings with no node on them — pairs of vertices a couple of nanometres apart
+where a computed split point rounded off the other segment's line.
+
+Those 6 are now **0**, because `execute` sweeps its own arrangement once more
+before giving up. Every crossing the first sweep found is an endpoint the second
+time, so the second sweep has only the ones rounding moved left to find. The
+figure-eight LineString buffer closes the same way and matches GEOS at
+4.2689251551415985. No coordinate is changed and no tolerance is introduced; see
+"One re-noding pass" in `CLAUDE.md`.
+
+What survives even that is a genuinely unrepresentable crossing: the exact
+intersection, rounded to f64, lands on or past an endpoint of one of the two
+segments, so putting a vertex there would move the crossing off the other
+segment's line. The noding reaches a fixpoint with the hole still in it —
+measured at 847 segments in and 847 out, pass after pass. `execute` reports
+`error.UnnodableCrossing` for these, which is the precision limit talking rather
+than a bug. It is 4 of 3,946 cluster unions, and only snapping the two vertices
+together would close it.
+
+### Robustness policy, corrected
+
+JTS and GEOS do carry a fallback: on any exception they retry on progressively
+coarser snap-rounded integer grids, twelve times. **That is not what saves them
+here.** Every one of 24 inputs qdgeo cannot buffer, GEOS buffers correctly on the
+*first* attempt at full double precision — the output carries irrational arc
+vertices with full mantissas and nothing lands on a coarse grid, so
+`bufferReducedPrecision` never runs. The difference is the graph, not the grid.
+
+qdgeo has no *snap-rounding* fallback and will not grow one: an exact-arithmetic
+failure is an error, by the rule in `CLAUDE.md`. Fixing the labelling removed
+most of the errors without touching that policy — the graph-labelling retry
+changes nothing about precision, only about which pass assigns the fill. The
+residue is exactly the part where the policy costs something — 4 of 3,946
+cluster unions, reported as `error.UnnodableCrossing` — and that trade is still
+open.
 
 ## The bar: turf/buffer coverage
 
@@ -86,14 +131,14 @@ projection. Measured, not assumed — every type below returns a usable result:
 
 | Input | turf, +200 m | turf, -200 m | here |
 | --- | --- | --- | --- |
-| Point | Polygon | null | **rejected** (status 2) |
-| MultiPoint | MultiPolygon | null | **rejected** |
-| LineString | Polygon | null | **rejected** |
-| MultiLineString | MultiPolygon | null | **rejected** |
+| Point | Polygon | null | ok (a disc) |
+| MultiPoint | MultiPolygon | null | ok |
+| LineString | Polygon | null | ok (a stadium) |
+| MultiLineString | MultiPolygon | null | ok |
 | Polygon | Polygon | Polygon | ok |
 | Polygon with hole | Polygon | Polygon | ok |
 | MultiPolygon | MultiPolygon | MultiPolygon | ok |
-| GeometryCollection | Polygon | empty | **rejected** |
+| GeometryCollection | Polygon | empty | ok (all three parts at once) |
 
 On the parcel workloads in `tests/compare`, turf passes **13 of 14** — it fails
 `donut-buffer--1`, where it emits a self-intersecting, invalid polygon. This
@@ -141,12 +186,10 @@ Winding alone cannot tell that curve from a real one.
 | invalid outputs | 1 (`donut-buffer--1`) | **0** |
 | worst relative area difference vs GEOS | — | **9.05e-11** |
 
-Measured on both backends, native and WASM. Overall across all 26 workloads,
-including the unions: 23 for this library, 20 for turf, 26 for GEOS.
-
-Timings moved with it — the complex parcel went from 240 ms to 80 ms in WASM,
-level with turf's 80 ms, and the 100-parcel buffers from 6.5 ms to 2.9 ms
-against turf's 26 ms.
+That was written when two engines shipped. Current numbers across all 26
+workloads live in the README: 26 for qdgeo, 26 for GEOS, 24 for JSTS, 23 for
+turf, 18 for Rust Geo. The complex parcel is 40 ms in WASM against turf's 140 ms
+and GEOS's 11 ms, and the 100-parcel buffers are 1.5 ms against turf's 35 ms.
 
 ## Original recommendation
 
