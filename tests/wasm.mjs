@@ -142,5 +142,18 @@ assert.ok(eroded > 0 && eroded < 7, `union eroded by 0.25 should shrink, got ${e
 // Difference is asymmetric: giving both squares to the subject leaves nothing to cut.
 assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.difference, 2, 0, 0))), 7);
 assert.equal(w.geom_flat_execute(9, 0, 0, 0), 6);
+
+// Counts come from the page and are u32, while `usize` is 32 bits on wasm32, so
+// 16 * coordinates overflows above 268,435,455. That used to trap the module;
+// it is now refused the same way an allocation failure is.
+for (const counts of [
+  [268435457, 1, 1, 0, 0], // 16 * coordinates overflows
+  [0, 3000000000, 2000000000, 0, 0], // the index counts overflow between them
+  [4294967295, 4294967295, 4294967295, 4294967295, 0], // everything at the maximum
+]) {
+  assert.equal(w.geom_flat_input(...counts), 0, `counts ${counts} should be refused, not trap`);
+}
+// And the module is still usable afterwards.
+assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 0))), 7);
 w.geom_clear();
 console.log('WASM runtime checks passed (flat ABI, four boolean ops, no imports)');

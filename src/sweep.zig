@@ -30,6 +30,21 @@ const pred = @import("predicates.zig");
 const A = std.mem.Allocator;
 const none = std.math.maxInt(u32);
 
+/// Which pass assigns the fill transitions.
+pub const Labelling = enum {
+    /// From the sweep's own status line, the way Martinez-Rueda does it. It
+    /// survives an arrangement that is not perfectly noded, because the status
+    /// order stays self-consistent even where two segments cross without a
+    /// node between them — and on real parcel data, near-coincident vertices
+    /// leave a handful of those in every large union.
+    sweep,
+    /// From the finished arrangement, the way JTS does it: one winding per
+    /// wedge of each vertex, propagated across the graph from a ray-cast seed.
+    /// Exact wherever the arrangement is exact, and wrong wherever it is not,
+    /// because a wedge model assumes every crossing carries a node.
+    graph,
+};
+
 pub const Path = g.Path;
 pub const Mode = g.Mode;
 pub const Limits = g.Limits;
@@ -75,6 +90,11 @@ const Event = struct {
     /// Settled at the closing event, once every subdivision that can touch this
     /// segment has happened and any coincident partners are exactly equal.
     transition: i8 = 0,
+    /// Topmost member of its coincident run in the status line. The nesting
+    /// walk follows `prev`, which skips over a run to its top, so whichever
+    /// member carries the run's transition has to be this one or the walk steps
+    /// straight past it.
+    carries: bool = false,
     resolved: bool = false,
     contour: u32 = none,
 };
@@ -84,6 +104,11 @@ const Engine = struct {
     limits: Limits,
     mode: Mode,
     work: usize = 0,
+    /// Crossings this sweep found and could not put a vertex on, because the
+    /// rounded intersection landed on or past an endpoint of one of the two
+    /// segments. Every one of them is a hole in the arrangement that no further
+    /// noding pass can close.
+    lost: usize = 0,
     p: std.ArrayList(g.Coordinate) = .empty,
     e: std.ArrayList(Event) = .empty,
     /// Events known before the sweep starts, sorted once. Subdivision events go
@@ -327,12 +352,21 @@ const Engine = struct {
             above[0] += m.delta[0];
             above[1] += m.delta[1];
             m.transition = 0;
+            m.carries = false;
             m.resolved = true;
         }
         const inside_above = en.filled(above);
         const inside_below = en.filled(en.e.items[en.status.items[low]].below);
         const carrier = &en.e.items[en.status.items[high]];
+        carrier.carries = true;
         carrier.transition = if (inside_above == inside_below) 0 else if (inside_above) @as(i8, 1) else -1;
+    }
+
+    /// Does this segment already have, or can it be given, a vertex at `key`?
+    fn covers(en: *const Engine, id: u32, key: u128) bool {
+        const lo = en.e.items[id].key;
+        const hi = en.e.items[en.e.items[id].other].key;
+        return key >= lo and key <= hi;
     }
 
     fn divideOne(en: *Engine, id: u32, x: g.Coordinate, key: u128) !void {
@@ -402,6 +436,14 @@ const Engine = struct {
                 en.p.items[ej.sa],
                 en.p.items[ej.sb],
             );
+            // A crossing that one of the segments cannot carry a vertex for is
+            // lost for good: the rounded point lands on or past an endpoint, so
+            // `divide` refuses it, and a later noding pass will find it, refuse
+            // it again, and sit at a fixpoint that still has a crossing in it.
+            // Counting them is what lets `execute` tell "try again" from
+            // "f64 cannot hold this arrangement" — see `Unnodable`.
+            const key = keyOf(canonical(x));
+            if (!en.covers(i, key) or !en.covers(j, key)) en.lost += 1;
             try en.divide(i, x);
             try en.divide(j, x);
             return;
@@ -473,8 +515,71 @@ const Engine = struct {
     }
 };
 
-const Edge = struct { from: u32, to: u32, event: u32, next: u32 = none };
+/// A directed edge between two deduplicated vertices. Ring assembly orients it
+/// so the filled side is on the left and chains it through `next`; the graph
+/// labelling uses the same type undirected, and parks the event that carries
+/// the run's transition in `event`.
+const Edge = struct { ends: [2]u32, event: u32 = none, next: u32 = none };
 const Ray = struct { edge: u32, outgoing: bool };
+
+/// The rays leaving every vertex, counter-clockwise, in CSR form. Each edge
+/// contributes an outgoing ray at its tail and the reverse of its own direction
+/// at its head, which is what lets ring assembly take the tightest turn at a
+/// pinch point and what lets the graph labelling carry a winding per wedge.
+///
+/// Both callers used to build this inline, identically, twenty-one lines each.
+const Fan = struct {
+    offsets: []const u32,
+    rays: []Ray,
+
+    fn build(sa: A, edges: []const Edge, points: []const g.Coordinate) !Fan {
+        const offsets = try sa.alloc(u32, points.len + 1);
+        @memset(offsets, 0);
+        for (edges) |edge| {
+            offsets[edge.ends[0] + 1] += 1;
+            offsets[edge.ends[1] + 1] += 1;
+        }
+        for (offsets[1..], 1..) |*v, i| v.* += offsets[i - 1];
+        const rays = try sa.alloc(Ray, 2 * edges.len);
+        const fill = try sa.alloc(u32, points.len);
+        @memcpy(fill, offsets[0..points.len]);
+        for (edges, 0..) |edge, e| {
+            rays[fill[edge.ends[0]]] = .{ .edge = @intCast(e), .outgoing = true };
+            fill[edge.ends[0]] += 1;
+            rays[fill[edge.ends[1]]] = .{ .edge = @intCast(e), .outgoing = false };
+            fill[edge.ends[1]] += 1;
+        }
+        const self: Fan = .{ .offsets = offsets, .rays = rays };
+        for (0..points.len) |v| {
+            const spokes = self.at(@intCast(v));
+            if (spokes.len < 2) continue;
+            const order: Radial = .{ .origin = points[v], .points = points, .edges = edges };
+            // Almost every vertex has degree two — 95% of a parcel union's, and
+            // every one of a buffer's, whose boundary is one long chain — and
+            // there `pdq`'s setup costs more than the single comparison the
+            // answer needs. Measured, that setup was a quarter of a buffer.
+            if (spokes.len == 2) {
+                if (order.less(spokes[1], spokes[0])) std.mem.swap(Ray, &spokes[0], &spokes[1]);
+                continue;
+            }
+            std.sort.pdq(Ray, spokes, order, Radial.less);
+        }
+        return self;
+    }
+
+    fn at(self: Fan, v: u32) []Ray {
+        return self.rays[self.offsets[v]..self.offsets[v + 1]];
+    }
+
+    /// Where `edge` sits in the order around `v`. Degrees are tiny, so a linear
+    /// scan beats anything with a structure behind it.
+    fn index(self: Fan, v: u32, edge: u32) usize {
+        const rays = self.at(v);
+        var i: usize = 0;
+        while (i < rays.len and rays[i].edge != edge) i += 1;
+        return i;
+    }
+};
 /// A traced boundary loop. Named for what it is rather than `LinearRing`, which in
 /// `geometry.zig` is the coordinate slice this holds.
 const Contour = struct {
@@ -556,23 +661,118 @@ fn sortEvents(en: *const Engine, a: A, ids: []u32) !void {
     }
 }
 
+/// Overlay `paths` under `mode`.
+///
+/// Which labelling pass runs is not the caller's business: the sweep's own is
+/// tried first because it is the cheaper one and it survives an imperfectly
+/// noded arrangement, and the graph pass is tried only when that one hands back
+/// an edge set that will not assemble. Each answers a case the other cannot —
+/// see `Labelling` — and a `NodingFailure` is the exact signal that the first
+/// answer was unusable, so retrying on it costs nothing on the paths that work
+/// and rescues the ones that do not.
 pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometry {
-    var result: g.Geometry = .{ .arena = std.heap.ArenaAllocator.init(a), .polygons = &.{} };
-    errdefer result.deinit();
+    var lost: usize = 0;
+    if (try attempt(a, paths, mode, limits, &lost)) |done| return done;
+
+    // Every crossing that sweep found is an endpoint now, so sweeping the
+    // arrangement again is left with only the ones rounding moved off a segment
+    // it had already split. That is the whole of iterated noding, and one pass
+    // is enough on everything measured — a second has never changed an outcome.
+    //
+    // It is not gated on `lost`. A lost crossing does say the noding will stop
+    // at a fixpoint that still has a hole in it, and on the parcel unions that
+    // predicts the retry's failure exactly — but a figure-eight line buffer
+    // carries a lost crossing *and* is rescued by the pass anyway, so using it
+    // to skip the retry would cost real answers to save time on calls that
+    // return an error either way.
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
-    const sa = scratch.allocator();
-    const oa = result.arena.allocator();
+    const renoded = try renodeOnce(a, scratch.allocator(), paths, mode, limits);
+    if (try attempt(a, renoded, mode, limits, &lost)) |done| return done;
+    // `lost` does earn its keep here: it separates "f64 cannot hold this
+    // arrangement" from "the algorithm is wrong", which is the difference
+    // between a known limit and a bug worth chasing.
+    return if (lost != 0) error.UnnodableCrossing else error.NodingFailure;
+}
 
-    var en: Engine = .{ .a = sa, .limits = limits, .mode = mode };
+/// Both labellings on one arrangement. Null means neither could assemble it.
+/// `lost` comes back with the crossings the noding could not place a vertex on.
+fn attempt(a: A, paths: []const Path, mode: Mode, limits: Limits, lost: *usize) !?g.Geometry {
+    for ([_]Labelling{ .sweep, .graph }) |how| {
+        return overlay(a, paths, mode, limits, how, lost) catch |err| switch (err) {
+            error.NodingFailure => continue,
+            else => err,
+        };
+    }
+    return null;
+}
+
+/// One noding pass: sweep `paths` and return the arrangement it produced, as
+/// one two-point path per noded segment.
+///
+/// The engine lives in an arena of its own, released before this returns, and
+/// only the paths are allocated from `sa`. Two overlay attempts run after this
+/// one and they do not need its events: leaving them in the caller's arena
+/// measured 2.56 KiB of peak heap per input coordinate against 0.68 on the path
+/// that never gets here.
+fn renodeOnce(a: A, sa: A, paths: []const Path, mode: Mode, limits: Limits) ![]const Path {
+    var inner = std.heap.ArenaAllocator.init(a);
+    defer inner.deinit();
+    const ia = inner.allocator();
+
+    var en: Engine = .{ .a = ia, .limits = limits, .mode = mode };
+    _ = try load(&en, ia, paths, limits) orelse return paths;
+    try en.sweep();
+
+    var kept: usize = 0;
+    for (en.e.items) |ev| kept += @intFromBool(ev.left);
+    // One block for every endpoint rather than a two-coordinate allocation per
+    // segment, which on a large arrangement is tens of thousands of them.
+    const ends = try sa.alloc(g.Coordinate, 2 * kept);
+    const out = try sa.alloc(Path, kept);
+    var at: usize = 0;
+    for (en.e.items, 0..) |ev, i| {
+        if (!ev.left) continue;
+        const pts = ends[2 * at ..][0..2];
+        // `delta[layer]` is +1 exactly when the segment ran lexicographically
+        // forward, so restoring that sign restores the winding it contributes.
+        if (ev.delta[ev.layer] > 0) {
+            pts[0] = en.p.items[i];
+            pts[1] = en.p.items[ev.other];
+        } else {
+            pts[0] = en.p.items[ev.other];
+            pts[1] = en.p.items[i];
+        }
+        out[at] = .{ .points = pts, .layer = ev.layer };
+        at += 1;
+    }
+    return out;
+}
+
+/// Turn `paths` into events and put them in sweep order. Null means there was
+/// nothing to sweep. Both `overlay` and `renodeOnce` start here.
+fn load(en: *Engine, sa: A, paths: []const Path, limits: Limits) !?[]u32 {
     // Two events per input edge, and the count is known before any are made.
     // Letting these grow by reallocation instead copies both arrays through
     // every doubling, which measured as three quarters of the build phase.
     var incoming: usize = 0;
     for (paths) |path| incoming += if (path.points.len < 2) 0 else path.points.len - 1;
     if (incoming <= limits.max_segments) {
-        try en.p.ensureTotalCapacity(sa, 2 * incoming);
-        try en.e.ensureTotalCapacity(sa, 2 * incoming);
+        // Precise, and with room for subdivision. Both halves are load-bearing
+        // and were measured on `parcels-union-4040`:
+        //
+        //   * `ensureTotalCapacity` asks `growCapacity` for the next geometric
+        //     step, which overshot 261,686 events to 392,537 — 1.5x, and 20 MiB
+        //     of peak heap once the arena rounded the node up.
+        //   * sizing it exactly instead is worse: subdivision appends past the
+        //     capacity, and a doubling *inside an arena* keeps the old buffer as
+        //     well as the new one. That measured 130 MiB against 45.
+        //
+        // Subdivision added 2% of the initial event count here, so an eighth is
+        // ample. Exceeding it is a memory spike, not an error.
+        const room = 2 * incoming + incoming / 8;
+        try en.p.ensureTotalCapacityPrecise(sa, room);
+        try en.e.ensureTotalCapacityPrecise(sa, room);
     }
     var segments: usize = 0;
     for (paths) |path| {
@@ -583,13 +783,28 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
             try en.addSegment(from, to, path.layer);
         }
     }
-    if (en.e.items.len == 0) return result;
-
+    if (en.e.items.len == 0) return null;
     const order = try sa.alloc(u32, en.e.items.len);
     for (order, 0..) |*v, i| v.* = @intCast(i);
-    try sortEvents(&en, sa, order);
+    try sortEvents(en, sa, order);
     en.initial = order;
+    return order;
+}
+
+fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Labelling, lost: *usize) !g.Geometry {
+    lost.* = 0;
+    var result: g.Geometry = .{ .arena = std.heap.ArenaAllocator.init(a), .polygons = &.{} };
+    errdefer result.deinit();
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    const sa = scratch.allocator();
+    const oa = result.arena.allocator();
+
+    var en: Engine = .{ .a = sa, .limits = limits, .mode = mode };
+    const order = try load(&en, sa, paths, limits) orelse return result;
     try en.sweep();
+    lost.* = en.lost;
+    if (labelling == .graph) try relabel(&en, sa);
 
     // Result segments, in sweep order, so every contour is created before any
     // contour it encloses and `prev_in_result` always resolves backwards.
@@ -608,44 +823,20 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
     try sortEvents(&en, sa, chosen.items);
 
     // Directed result edges, oriented so the filled side is always on the left.
-    var vertices: std.AutoHashMapUnmanaged(u128, u32) = .empty;
-    var coordinates: std.ArrayList(g.Coordinate) = .empty;
+    var vertices = try Vertices.init(sa, 2 * chosen.items.len);
     const edges = try sa.alloc(Edge, chosen.items.len);
     for (chosen.items, edges) |id, *edge| {
         const ev = en.e.items[id];
-        const head = try vertex(sa, &vertices, &coordinates, en.p.items[id], en.e.items[id].key);
-        const tail = try vertex(sa, &vertices, &coordinates, en.p.items[ev.other], en.e.items[ev.other].key);
+        const head = vertices.id(en.p.items[id], en.e.items[id].key);
+        const tail = vertices.id(en.p.items[ev.other], en.e.items[ev.other].key);
         edge.* = if (ev.transition > 0)
-            .{ .from = head, .to = tail, .event = id }
+            .{ .ends = .{ head, tail }, .event = id }
         else
-            .{ .from = tail, .to = head, .event = id };
+            .{ .ends = .{ tail, head }, .event = id };
     }
-
-    // Radially ordered rays per vertex, in CSR form. Each edge contributes an
-    // outgoing ray at its tail and the reverse of its own direction at its head,
-    // which is what lets the walk take the tightest turn at a pinch point.
-    const offsets = try sa.alloc(u32, coordinates.items.len + 1);
-    @memset(offsets, 0);
-    for (edges) |edge| {
-        offsets[edge.from + 1] += 1;
-        offsets[edge.to + 1] += 1;
-    }
-    for (offsets[1..], 1..) |*v, i| v.* += offsets[i - 1];
-    const rays = try sa.alloc(Ray, 2 * edges.len);
-    const fill = try sa.alloc(u32, coordinates.items.len);
-    @memcpy(fill, offsets[0..coordinates.items.len]);
-    for (edges, 0..) |edge, index| {
-        rays[fill[edge.from]] = .{ .edge = @intCast(index), .outgoing = true };
-        fill[edge.from] += 1;
-        rays[fill[edge.to]] = .{ .edge = @intCast(index), .outgoing = false };
-        fill[edge.to] += 1;
-    }
-    for (0..coordinates.items.len) |v| {
-        const slice = rays[offsets[v]..offsets[v + 1]];
-        std.sort.pdq(Ray, slice, Radial{ .origin = coordinates.items[v], .points = coordinates.items, .edges = edges }, Radial.less);
-    }
-    for (0..coordinates.items.len) |v| {
-        const slice = rays[offsets[v]..offsets[v + 1]];
+    const fan = try Fan.build(sa, edges, vertices.coordinates());
+    for (0..vertices.coordinates().len) |v| {
+        const slice = fan.at(@intCast(v));
         for (slice, 0..) |ray, k| {
             if (ray.outgoing) continue;
             var step: usize = 1;
@@ -660,7 +851,7 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
     }
 
     var rings: std.ArrayList(Contour) = .empty;
-    const positions = try sa.alloc(u32, coordinates.items.len);
+    const positions = try sa.alloc(u32, vertices.coordinates().len);
     @memset(positions, none);
     const used = try sa.alloc(bool, edges.len);
     @memset(used, false);
@@ -682,18 +873,18 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
         // revisited vertex so each emitted ring is simple.
         stack.clearRetainingCapacity();
         for (chain.items) |edge| {
-            const v = edges[edge].from;
+            const v = edges[edge].ends[0];
             if (positions[v] != none) {
                 const cut = positions[v];
-                try emit(oa, sa, &rings, stack.items[cut..], edges, coordinates.items, &en, limits, &output_points);
-                for (stack.items[cut..]) |k| positions[edges[k].from] = none;
+                try emit(oa, sa, &rings, stack.items[cut..], edges, vertices.coordinates(), &en, limits, &output_points);
+                for (stack.items[cut..]) |k| positions[edges[k].ends[0]] = none;
                 stack.items.len = cut;
             }
             positions[v] = @intCast(stack.items.len);
             try stack.append(sa, edge);
         }
-        try emit(oa, sa, &rings, stack.items, edges, coordinates.items, &en, limits, &output_points);
-        for (stack.items) |k| positions[edges[k].from] = none;
+        try emit(oa, sa, &rings, stack.items, edges, vertices.coordinates(), &en, limits, &output_points);
+        for (stack.items) |k| positions[edges[k].ends[0]] = none;
     }
     if (rings.items.len == 0) return result;
 
@@ -740,13 +931,61 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
     return result;
 }
 
-fn vertex(a: A, map: *std.AutoHashMapUnmanaged(u128, u32), points: *std.ArrayList(g.Coordinate), p: g.Coordinate, key: u128) !u32 {
-    if (map.get(key)) |found| return found;
-    const id: u32 = @intCast(points.items.len);
-    try points.append(a, p);
-    try map.put(a, key, id);
-    return id;
-}
+/// Deduplicated vertices: two endpoints are the same vertex exactly when their
+/// sweep keys match, so the key is the whole identity and the coordinate rides
+/// along. Ring assembly and the graph labelling each build one.
+///
+/// On a buffer, whose result keeps nearly every noded segment, this is the
+/// largest phase after the sweep itself, so it is worth the custom context.
+const Vertices = struct {
+    /// `keyOf` already packs two order-preserving f64 patterns, so one fold and
+    /// a 64-bit finalizer avalanche it well enough — and cost far less than
+    /// `AutoHashMap`'s Wyhash over all sixteen bytes.
+    const Context = struct {
+        pub fn hash(_: Context, key: u128) u64 {
+            var h: u64 = @as(u64, @truncate(key)) ^ (@as(u64, @truncate(key >> 64)) *% 0x9E3779B97F4A7C15);
+            h ^= h >> 33;
+            h *%= 0xFF51AFD7ED558CCD;
+            h ^= h >> 33;
+            return h;
+        }
+        pub fn eql(_: Context, x: u128, y: u128) bool {
+            return x == y;
+        }
+    };
+    /// Also the merge map in `relabel`. One instantiation in the artifact,
+    /// not two — a second cost 8.8 KB raw and 2.5 KB gzipped, measured.
+    pub const Map = std.HashMapUnmanaged(u128, u32, Context, std.hash_map.default_max_load_percentage);
+
+    map: Map,
+    points: []g.Coordinate,
+    count: usize = 0,
+
+    /// `upper` is the most vertices that can appear — two per edge. Sizing for
+    /// it exactly means `id` never grows anything, which takes the rehash path
+    /// out of the loop and the allocation-failure path out of the binary;
+    /// growing unreserved measured 1.7x slower on this phase.
+    fn init(a: A, upper: usize) !Vertices {
+        var map: Map = .empty;
+        try map.ensureTotalCapacity(a, @intCast(upper));
+        return .{ .map = map, .points = try a.alloc(g.Coordinate, upper) };
+    }
+
+    fn id(self: *Vertices, p: g.Coordinate, key: u128) u32 {
+        // One probe, not the two that a `get` then a `put` would cost.
+        const found = self.map.getOrPutAssumeCapacity(key);
+        if (!found.found_existing) {
+            found.value_ptr.* = @intCast(self.count);
+            self.points[self.count] = p;
+            self.count += 1;
+        }
+        return found.value_ptr.*;
+    }
+
+    fn coordinates(self: Vertices) []const g.Coordinate {
+        return self.points[0..self.count];
+    }
+};
 
 const Seeds = struct {
     rings: []const Contour,
@@ -756,13 +995,16 @@ const Seeds = struct {
     }
 };
 
+/// Counter-clockwise order of the rays leaving one vertex. Both the labelling
+/// pass and ring assembly order by it, so keeping one comparator keeps one
+/// `pdq` in the binary.
 const Radial = struct {
     origin: g.Coordinate,
     points: []const g.Coordinate,
     edges: []const Edge,
     fn target(self: Radial, ray: Ray) g.Coordinate {
-        const edge = self.edges[ray.edge];
-        return self.points[if (ray.outgoing) edge.to else edge.from];
+        const pair = self.edges[ray.edge].ends;
+        return self.points[if (ray.outgoing) pair[1] else pair[0]];
     }
     fn upper(o: g.Coordinate, p: g.Coordinate) bool {
         return p.y > o.y or (p.y == o.y and p.x >= o.x);
@@ -781,6 +1023,260 @@ const Radial = struct {
     }
 };
 
+/// The arrangement, re-labelled from the finished graph rather than from the
+/// sweep's running state — JTS's ordering: node first, then label.
+///
+/// Winding belongs to the faces of the arrangement, so it is carried per wedge:
+/// the segments at a vertex cut its neighbourhood into wedges, and stepping
+/// counter-clockwise across one changes the winding by its delta, signed by the
+/// half-plane the segment leaves in. One wedge per connected component is seeded
+/// by ray casting; everything else follows from adjacency.
+const Relabel = struct {
+    en: *Engine,
+    deltas: []const [2]i32,
+    edges: []const Edge,
+    points: []const g.Coordinate,
+    fan: Fan,
+    wedge: [][2]i32,
+
+    /// Does this segment leave the vertex to the right?
+    ///
+    /// Stepping counter-clockwise across a segment crosses it *upward* exactly
+    /// when the segment's counter-clockwise normal points up, and that normal is
+    /// the direction rotated a quarter turn — so the test is on the x component,
+    /// not the y. A vertical segment is decided by the shear, which tilts it
+    /// right, so leaving upward counts as rightward.
+    fn leaves(self: Relabel, v: u32, spoke: Ray) bool {
+        const pair = self.edges[spoke.edge].ends;
+        const other = if (pair[0] == v) pair[1] else pair[0];
+        const o = self.points[v];
+        const p = self.points[other];
+        return p.x > o.x or (p.x == o.x and p.y > o.y);
+    }
+
+    /// Fill every wedge at `v`, given that wedge `start` holds `seed`.
+    fn settle(self: Relabel, v: u32, start: usize, seed: [2]i32) void {
+        const base = self.fan.offsets[v];
+        const at = self.fan.at(v);
+        self.wedge[base + start] = seed;
+        var carried = seed;
+        var step: usize = 1;
+        while (step < at.len) : (step += 1) {
+            const i = (start + step) % at.len;
+            const d = self.deltas[at[i].edge];
+            // Crossing counter-clockwise is upward when the segment leaves into
+            // the upper half-plane and downward when it leaves into the lower.
+            const sign: i32 = if (self.leaves(v, at[i])) 1 else -1;
+            carried = .{ carried[0] + sign * d[0], carried[1] + sign * d[1] };
+            self.wedge[base + i] = carried;
+        }
+    }
+
+    /// The wedge above a segment at one of its ends, and the one below it.
+    fn sides(self: Relabel, v: u32, i: usize) struct { above: usize, below: usize } {
+        const at = self.fan.at(v);
+        const ccw = i;
+        const cw = (i + at.len - 1) % at.len;
+        // Counter-clockwise of a ray leaving rightward is above the segment.
+        return if (self.leaves(v, at[i]))
+            .{ .above = ccw, .below = cw }
+        else
+            .{ .above = cw, .below = ccw };
+    }
+};
+
+/// Discard the transitions the sweep assigned and derive them again from the
+/// finished arrangement: merge coincident edges, cut every vertex into wedges,
+/// carry one winding per wedge, and mark a segment as a result edge where the
+/// wedges either side of it disagree about being filled.
+fn relabel(en: *Engine, sa: A) !void {
+    var list: std.ArrayList(u32) = .empty;
+    for (en.e.items, 0..) |ev, i| {
+        if (!ev.left) continue;
+        if (ev.delta[0] == 0 and ev.delta[1] == 0) continue;
+        try list.append(sa, @intCast(i));
+    }
+    for (en.e.items) |*ev| {
+        ev.transition = 0;
+        ev.resolved = true;
+    }
+    if (list.items.len == 0) return;
+    const segments = list.items;
+
+    var vertices = try Vertices.init(sa, 2 * segments.len);
+    const ends = try sa.alloc([2]u32, segments.len);
+    for (segments, ends) |id, *pair| {
+        const other = en.e.items[id].other;
+        pair[0] = vertices.id(en.p.items[id], en.e.items[id].key);
+        pair[1] = vertices.id(en.p.items[other], en.e.items[other].key);
+    }
+
+    // Merge coincident edges before labelling, the way JTS's `insertUniqueEdge`
+    // does: one edge per geometric location carrying the summed delta. Noding
+    // has already split every overlap into pieces that are either identical or
+    // disjoint, so the endpoint pair is a complete key. Carrying duplicates into
+    // the labelling instead leaves a zero-width wedge between them, and the
+    // winding either side of that wedge comes out wrong.
+    // Sized for the worst case — no two segments coincident — so nothing here
+    // grows either.
+    var groups: Vertices.Map = .empty;
+    try groups.ensureTotalCapacity(sa, @intCast(segments.len));
+    const merged = try sa.alloc(Edge, segments.len);
+    const summed = try sa.alloc([2]i32, segments.len);
+    var count: usize = 0;
+    for (segments, ends) |id, pair| {
+        const key = (@as(u128, pair[0]) << 32) | pair[1];
+        const d = en.e.items[id].delta;
+        const found = groups.getOrPutAssumeCapacity(key);
+        if (!found.found_existing) {
+            found.value_ptr.* = @intCast(count);
+            merged[count] = .{ .ends = pair };
+            summed[count] = .{ 0, 0 };
+            count += 1;
+        }
+        const at = found.value_ptr.*;
+        summed[at][0] += d[0];
+        summed[at][1] += d[1];
+        // One event per merged edge carries the transition and the rest stay at
+        // zero, the same shape `resolve` gives a coincident bundle — two events
+        // labelled for one edge would hand assembly a doubled ring side. It has
+        // to be the member `resolve` would have chosen, because `enter` records
+        // `prev` as the entry *below* a coincident run, so the nesting walk only
+        // ever lands on the run's topmost member.
+        const carrier = &merged[at].event;
+        if (carrier.* == none or en.e.items[id].carries) carrier.* = id;
+    }
+    const unique = merged[0..count];
+    const deltas = summed[0..count];
+    const fan = try Fan.build(sa, unique, vertices.coordinates());
+
+    const self: Relabel = .{
+        .en = en,
+        .deltas = deltas,
+        .edges = unique,
+        .points = vertices.coordinates(),
+        .fan = fan,
+        .wedge = try sa.alloc([2]i32, fan.rays.len),
+    };
+
+    const known = try sa.alloc(bool, vertices.coordinates().len);
+    @memset(known, false);
+    var queue: std.ArrayList(u32) = .empty;
+
+    // Components first, so each can be seeded at its rightmost vertex — the one
+    // place the +x direction is provably outside that component, which is what
+    // makes the ray cast below exact rather than an epsilon away from a vertex.
+    const parent = try sa.alloc(u32, vertices.coordinates().len);
+    for (parent, 0..) |*v, i| v.* = @intCast(i);
+    const find = struct {
+        fn f(p: []u32, x: u32) u32 {
+            var r = x;
+            while (p[r] != r) r = p[r];
+            var w = x;
+            while (p[w] != r) {
+                const next = p[w];
+                p[w] = r;
+                w = next;
+            }
+            return r;
+        }
+    }.f;
+    for (unique) |edge| {
+        const x = find(parent, edge.ends[0]);
+        const y = find(parent, edge.ends[1]);
+        if (x != y) parent[x] = y;
+    }
+    const rightmost = try sa.alloc(u32, vertices.coordinates().len);
+    @memset(rightmost, none);
+    for (0..vertices.coordinates().len) |v| {
+        const c = find(parent, @intCast(v));
+        const held = rightmost[c];
+        if (held == none) {
+            rightmost[c] = @intCast(v);
+            continue;
+        }
+        const p = vertices.coordinates()[v];
+        const q = vertices.coordinates()[held];
+        if (p.x > q.x or (p.x == q.x and p.y > q.y)) rightmost[c] = @intCast(v);
+    }
+
+    for (0..vertices.coordinates().len) |start| {
+        if (known[start]) continue;
+        const root: u32 = rightmost[find(parent, @intCast(start))];
+        // Seed the wedge holding direction +x. Winding at infinity is zero, so
+        // the winding just right of `root` is what a ray from there to +x
+        // crosses, counted with sign.
+        //
+        // The component's own edges are skipped: `root` is its rightmost
+        // vertex, so a point just to the right of `root` is outside the
+        // component's bounding box and it winds zero there. That is also what
+        // makes the count exact — every remaining edge belongs to another
+        // component, and components share no vertex, so none of them touches
+        // `root`.
+        const origin = vertices.coordinates()[root];
+        const component = find(parent, root);
+        var seed: [2]i32 = .{ 0, 0 };
+        for (unique, deltas) |edge, d| {
+            if (find(parent, edge.ends[0]) == component) continue;
+            const tail = vertices.coordinates()[edge.ends[0]];
+            const head = vertices.coordinates()[edge.ends[1]];
+            // Sunday's half-open rule: an edge spans `[min y, max y)`, so a
+            // vertex sitting exactly on the ray is counted by the edge above it
+            // and by no other. That removes the degenerate cases outright
+            // rather than nudging the ray off them.
+            const up = tail.y <= origin.y and origin.y < head.y;
+            const down = head.y <= origin.y and origin.y < tail.y;
+            if (!up and !down) continue;
+            // And the crossing has to be to the right of the origin, which is
+            // the side test on the directed edge.
+            const side = pred.orient(tail, head, origin);
+            if (if (up) side <= 0 else side >= 0) continue;
+            // Crossing rightward moves off the left of an upward edge, so the
+            // winding out at infinity is lower by its delta; walking back in
+            // from infinity puts it back.
+            const sign: i32 = if (up) 1 else -1;
+            seed[0] += sign * d[0];
+            seed[1] += sign * d[1];
+        }
+        const at = self.fan.at(root);
+        const first = Radial{ .origin = origin, .points = vertices.coordinates(), .edges = unique };
+        const on_axis = blk: {
+            const t = first.target(at[0]);
+            break :blk t.y == origin.y and t.x > origin.x;
+        };
+        self.settle(root, if (on_axis) 0 else at.len - 1, seed);
+        known[root] = true;
+        queue.clearRetainingCapacity();
+        try queue.append(sa, root);
+
+        while (queue.pop()) |v| {
+            for (self.fan.at(v), 0..) |spoke, i| {
+                const pair = unique[spoke.edge].ends;
+                const other = if (pair[0] == v) pair[1] else pair[0];
+                if (known[other]) continue;
+                // The face above a segment is the same face at both its ends.
+                const here = self.sides(v, i);
+                const carried = self.wedge[self.fan.offsets[v] + here.above];
+                const j = self.fan.index(other, spoke.edge);
+                const there = self.sides(other, j);
+                self.settle(other, there.above, carried);
+                known[other] = true;
+                try queue.append(sa, other);
+            }
+        }
+    }
+
+    for (unique, 0..) |edge, at| {
+        const tail = edge.ends[0];
+        const i = self.fan.index(tail, @intCast(at));
+        const side = self.sides(tail, i);
+        const base = self.fan.offsets[tail];
+        const inside_above = en.filled(self.wedge[base + side.above]);
+        const inside_below = en.filled(self.wedge[base + side.below]);
+        en.e.items[edge.event].transition = if (inside_above == inside_below) 0 else if (inside_above) @as(i8, 1) else -1;
+    }
+}
+
 fn emit(
     oa: A,
     sa: A,
@@ -795,9 +1291,9 @@ fn emit(
     if (loop.len < 3) return;
     var points: std.ArrayList(g.Coordinate) = .empty;
     for (loop, 0..) |edge, i| {
-        const p = coordinates[edges[edge].from];
-        const before = coordinates[edges[loop[(i + loop.len - 1) % loop.len]].from];
-        const after = coordinates[edges[loop[(i + 1) % loop.len]].from];
+        const p = coordinates[edges[edge].ends[0]];
+        const before = coordinates[edges[loop[(i + loop.len - 1) % loop.len]].ends[0]];
+        const after = coordinates[edges[loop[(i + 1) % loop.len]].ends[0]];
         if (pred.orient(before, p, after) != 0) try points.append(oa, p);
     }
     if (points.items.len < 3) return;

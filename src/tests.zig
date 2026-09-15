@@ -395,6 +395,33 @@ test "WKB parses every 2D OGC type, including nested collections" {
     try std.testing.expectError(error.LimitExceeded, geo.wkb.parse(a, bytes.items, .{}));
 }
 
+test "buffer accepts empty polygons and lines with repeated coordinates" {
+    // Found by the JTS-shaped review, not by the suite: both are legal input
+    // that real WKB contains, and both used to fail.
+    var empty = try geo.bufferAll(a, &.{.{ .rings = &.{} }}, 1, .{});
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.polygons.len);
+
+    // `geometry.zig` documents repeated adjacent coordinates as legal. Rings
+    // were de-duplicated by `normalize`; lines reached `offsetOf` with a
+    // zero-length segment and came back `error.PrecisionLoss`.
+    const clean = [_]geo.Coordinate{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 1 } };
+    var reference = try geo.bufferInput(a, .{ .line_strings = &.{&clean} }, 1, .{});
+    defer reference.deinit();
+    const expected = area(reference.polygons);
+
+    const repeated = [_][]const geo.Coordinate{
+        &.{ .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 1 } },
+        &.{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 1 } },
+        &.{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 1 }, .{ .x = 2, .y = 1 } },
+    };
+    for (repeated) |line| {
+        var out = try geo.bufferInput(a, .{ .line_strings = &.{line} }, 1, .{});
+        defer out.deinit();
+        try std.testing.expectApproxEqAbs(expected, area(out.polygons), 1e-9);
+    }
+}
+
 test "a closed line buffers to a band around its ring, either winding" {
     // The JTS suite's "Closed Line" case, and its counter-clockwise twin. A
     // closed line is ring linework: the band is an annulus until the distance
@@ -459,7 +486,7 @@ test "buffering a point is a disc and buffering a line is a stadium" {
 }
 
 fn block(counts: geo.flat.Counts, coords: []const f64, ends: []const u32) ![]align(8) u8 {
-    const bytes = try a.alignedAlloc(u8, .@"8", geo.flat.size(counts));
+    const bytes = try a.alignedAlloc(u8, .@"8", try geo.flat.size(counts));
     @memcpy(bytes[0 .. coords.len * 8], std.mem.sliceAsBytes(coords));
     @memcpy(bytes[coords.len * 8 ..][0 .. ends.len * 4], std.mem.sliceAsBytes(ends));
     return bytes;
@@ -575,4 +602,53 @@ test "boolean operations on a polygon with a hole and a disjoint clip" {
     defer shared.deinit();
     try std.testing.expectEqual(@as(f64, 10 * 2 - 4 * 2), area(shared.polygons));
     try std.testing.expectEqual(@as(usize, 2), shared.polygons.len);
+}
+
+test "buffers the sweep's own labelling cannot close fall back to the graph pass" {
+    // Each of these returned NodingFailure until `sweep.execute` learned to
+    // retry with the graph labelling. The expected areas are GEOS's, which the
+    // retry now reproduces to well inside the tolerance below.
+    const low = rect(0, 0, 2, 1);
+    const high = rect(2, 2, 3, 3);
+    var low_rings = [_]geo.LinearRing{&low};
+    var high_rings = [_]geo.LinearRing{&high};
+    const pair = [_]geo.Polygon{ .{ .rings = &low_rings }, .{ .rings = &high_rings } };
+    for ([_]struct { steps: u32, expected: f64 }{
+        .{ .steps = 1, .expected = 16.0 },
+        .{ .steps = 16, .expected = 17.704822735818908 },
+    }) |case| {
+        var out = try geo.bufferAll(a, &pair, 1.0, .{ .quadrant_segments = case.steps });
+        defer out.deinit();
+        try std.testing.expectApproxEqAbs(case.expected, area(out.polygons), 1e-9);
+    }
+
+    // An L narrower than twice the erosion distance everywhere: GEOS erodes it
+    // away entirely, and so must this.
+    const ell = [_]geo.Coordinate{
+        .{ .x = 1, .y = 0 }, .{ .x = 3, .y = 0 }, .{ .x = 3, .y = 3 }, .{ .x = 0, .y = 3 },
+        .{ .x = 0, .y = 1 }, .{ .x = 1, .y = 1 }, .{ .x = 1, .y = 0 },
+    };
+    var ell_rings = [_]geo.LinearRing{&ell};
+    const shape = [_]geo.Polygon{.{ .rings = &ell_rings }};
+    var eroded = try geo.bufferAll(a, &shape, -1.25, .{ .quadrant_segments = 16 });
+    defer eroded.deinit();
+    try std.testing.expectEqual(@as(usize, 0), eroded.polygons.len);
+}
+
+test "a self-crossing closed line buffers once the arrangement is noded again" {
+    // A figure eight: zero signed area, and the two offset curves cross at a
+    // point that rounding puts on neither of them. One sweep cannot node that,
+    // so this returned NodingFailure until `execute` learned to sweep its own
+    // arrangement a second time. GEOS: one polygon with two holes, area
+    // 4.2689251551415985.
+    const eight = [_]geo.Coordinate{
+        .{ .x = 0, .y = 0 }, .{ .x = 2, .y = 2 }, .{ .x = 2, .y = 0 },
+        .{ .x = 0, .y = 2 }, .{ .x = 0, .y = 0 },
+    };
+    var lines = [_]geo.LineString{&eight};
+    var out = try geo.bufferInput(a, .{ .line_strings = &lines }, 0.25, .{});
+    defer out.deinit();
+    try std.testing.expectEqual(@as(usize, 1), out.polygons.len);
+    try std.testing.expectEqual(@as(usize, 3), out.polygons[0].rings.len);
+    try std.testing.expectApproxEqAbs(4.2689251551415985, area(out.polygons), 1e-9);
 }

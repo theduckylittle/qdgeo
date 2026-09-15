@@ -35,13 +35,13 @@ def measure(fn, repeats):
 class Native:
     def __init__(self):
         self.lib = C.CDLL(str(ROOT / 'zig-out/lib/libqdgeo_native.so'))
-        self.lib.geom_union_with_options.argtypes = [C.c_void_p, C.c_size_t, C.c_double]
-        self.lib.geom_buffer_with_options.argtypes = [C.c_void_p, C.c_size_t, C.c_double, C.c_double, C.c_uint32]
+        self.lib.geom_union.argtypes = [C.c_void_p, C.c_size_t]
+        self.lib.geom_buffer_with_options.argtypes = [C.c_void_p, C.c_size_t, C.c_double, C.c_uint32]
         self.lib.geom_result_ptr.restype = C.c_void_p
         self.lib.geom_result_len.restype = C.c_size_t
     def run(self, blob, c):
-        # Borrow a Python-owned input allocation for this synchronous call. No
-        # geom_free on it. Returned result is copied before releasing C ownership.
+        # The library borrows these bytes for the call and never takes ownership,
+        # so Python keeps them. The result is copied before geom_clear releases it.
         try:
             if c['operation'] == 'union':
                 status = self.lib.geom_union(blob, len(blob))
