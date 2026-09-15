@@ -28,6 +28,32 @@ Four goals, in the order they break ties:
 Not production-ready. Read `TODO.md` first — it holds the current verified
 status and the ordered blocker list.
 
+## Toolchain
+
+Built and tested on **Zig 0.16.0**, which is the current stable release and what
+`build.zig.zon` requires. There is no stable 0.17 yet; master is `0.17.0-dev`.
+
+The tree also compiles and passes on master, verified against
+`0.17.0-dev.2131+d08989840` (2026-09-13): 29 unit tests in both modes, every
+build target, `zig fmt --check`, 155/161 JTS, and the cluster corpora at their
+recorded 0 and 4. The WASM artifact comes out 1,066 bytes larger.
+
+One change was needed, and it is written so both versions accept it:
+
+- **`**` for array repetition is gone.** `[_]bool{false} ** 100` now tokenizes as
+  two `*`, and 0.17 rejects it with "binary operator `'*'` has whitespace on one
+  side, but not the other", naming `*` rather than `**` — which is the clue.
+  `@splat` replaces it and compiles on 0.16 as well:
+
+  ```zig
+  var cells: [100]bool = @splat(false);
+  ```
+
+Keep new code compiling on both until 0.17 ships. The `Zig master
+(informational)` CI job builds against master on every PR and is
+`continue-on-error`, so a break there reports upstream drift without failing the
+branch. When it goes red, read it before upgrading anything.
+
 ## Commands
 
 ```sh

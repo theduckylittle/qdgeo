@@ -1304,6 +1304,31 @@ Two other symptoms trace to the same defect and will close with it:
 - `deduplicate` and the zero-ring guard in `bufferInput` fixed two *other*
   buffer failures found in the same review; those are done and tested.
 
+### Zig 0.17 readiness — checked 2026-09-15
+
+0.17 is not released; stable is 0.16.0 and master is `0.17.0-dev`. Built the
+tree against `0.17.0-dev.2131+d08989840` and it needed **one** change: `**` for
+array repetition is gone, and `@splat` replaces it in a form both versions
+accept. Everything else compiled untouched — `std.ArrayList` unmanaged with
+`ensureTotalCapacityPrecise` and `appendAssumeCapacity`, `std.HashMapUnmanaged`
+with a custom context and `getOrPutAssumeCapacity`, `ArenaAllocator`,
+`wasm_allocator`, `std.sort.pdq`, and the whole `build.zig` API.
+
+Verified on master: 29 unit tests in both modes, all build targets,
+`zig fmt --check`, 155/161 JTS, and the cluster corpora at 0 buffer and 4 union
+failures — the same baselines as 0.16. The WASM artifact is 136,001 bytes
+against 134,935, so +1,066.
+
+CI gained a `Zig master (informational)` job, `continue-on-error`, to report
+upstream drift on every PR rather than have it found during an upgrade.
+
+- [ ] **Re-check when 0.17 actually ships.** Master moves daily and this was one
+      commit's worth of evidence; the release will have accumulated more. The
+      nightly job is the tripwire, not a guarantee.
+- [ ] **Decide whether to raise `minimum_zig_version`** once 0.17 is stable. It
+      stays at 0.16.0 while 0.16 is supported, and nothing currently needs a
+      0.17 feature.
+
 ### Not blockers
 
 - [ ] **Trim two binary searches per event from the sweep.** Batching added a

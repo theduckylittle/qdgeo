@@ -159,7 +159,7 @@ test "random rectangle unions agree with integer-cell reference and are idempote
         var rings: [8][5]geo.Coordinate = undefined;
         var ring_slices: [8][1]geo.LinearRing = undefined;
         var polygons: [8]geo.Polygon = undefined;
-        var cells = [_]bool{false} ** 100;
+        var cells: [100]bool = @splat(false);
         for (&rings, &ring_slices, &polygons) |*r, *rs, *p| {
             const x = random.random().uintLessThan(usize, 9);
             const y = random.random().uintLessThan(usize, 9);
