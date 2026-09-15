@@ -114,6 +114,20 @@ fn incentre(a: g.Coordinate, b: g.Coordinate, c: g.Coordinate) g.Coordinate {
     };
 }
 
+/// Drop repeated adjacent coordinates, keeping the closing point of a closed
+/// chain. Borrowed input is returned unchanged when there is nothing to drop.
+fn deduplicate(a: std.mem.Allocator, line: g.LineString) !g.LineString {
+    var repeats: usize = 0;
+    for (line[0 .. line.len - 1], line[1..]) |u, v| repeats += @intFromBool(g.equal(u, v));
+    if (repeats == 0) return line;
+    var points = try std.ArrayList(g.Coordinate).initCapacity(a, line.len - repeats);
+    for (line) |point| {
+        if (points.items.len != 0 and g.equal(points.items[points.items.len - 1], point)) continue;
+        points.appendAssumeCapacity(point);
+    }
+    return points.items;
+}
+
 fn addCurve(a: std.mem.Allocator, paths: *std.ArrayList(g.Path), curve: []const g.Coordinate, count: *usize, limit: usize) !void {
     // A curve too short to enclose anything encloses nothing.
     if (curve.len < 4) return;
@@ -187,6 +201,9 @@ pub fn bufferInput(a: std.mem.Allocator, input: Input, distance: f64, options: B
     var paths: std.ArrayList(g.Path) = .empty;
     var count: usize = 0;
     for (united.polygons) |poly| {
+        // `POLYGON EMPTY` parses to a polygon with no rings at all, and the
+        // single-polygon path hands it straight through. It encloses nothing.
+        if (poly.rings.len == 0) continue;
         // A shell that erodes away takes its holes with it; a hole that fills in
         // simply stops being a hole.
         if (erodedCompletely(poly.rings[0], distance)) continue;
@@ -196,8 +213,14 @@ pub fn bufferInput(a: std.mem.Allocator, input: Input, distance: f64, options: B
         }
     }
     if (distance > 0) {
-        for (input.line_strings) |line| {
-            try g.validateLineString(line);
+        for (input.line_strings) |raw| {
+            try g.validateLineString(raw);
+            // `geometry.zig` documents repeated adjacent coordinates as legal
+            // and common in real WKB, and `normalize` drops them from rings.
+            // Lines never got the same treatment, so a zero-length segment
+            // reached `offsetOf` and came back as `error.PrecisionLoss`.
+            const line = try deduplicate(sa, raw);
+            if (line.len < 2) continue;
             // A closed line is ring linework, not an open chain, and buffering
             // it means the band either side of that ring — an annulus, until
             // the distance is wide enough to swallow the middle. Capping it as
@@ -205,6 +228,11 @@ pub fn bufferInput(a: std.mem.Allocator, input: Input, distance: f64, options: B
             // the overlay a curve it cannot node. Offsetting the ring and its
             // reverse gives one curve winding +1 around the outside and one
             // winding -1 inside, so `winding >= 1` is the annulus exactly.
+            // A closed line with zero signed area — a figure eight — has no
+            // inside to offset either side of, so it falls through to the open
+            // path below. That used to fail there; the overlay's re-noding pass
+            // closes it now. Splitting it into two open chains was tried and
+            // changes nothing either way.
             const closed = line.len >= 4 and g.equal(line[0], line[line.len - 1]);
             const winding = if (closed) pred.areaSign(line) else 0;
             if (closed and winding != 0) {

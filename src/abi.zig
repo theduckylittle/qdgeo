@@ -5,10 +5,8 @@
 //! This is the whole surface the browser gets, and the browser is 90% of the
 //! target. WKB lives in `abi_wkb.zig` and links only into the native library:
 //! no browser host wants it — OpenLayers holds flat coordinates and MapLibre
-//! holds GeoJSON — and leaving it out drops nine exports, 4 KiB gzipped, and the
-//! one error-prone ownership contract in the API. The flat path has no
-//! `geom_alloc`/`geom_free` pairing to get wrong: one block in, one block out,
-//! reused across calls.
+//! holds GeoJSON — and leaving it out drops six exports and 4 KiB gzipped. One
+//! block in, one block out, reused across calls.
 //!
 //! Both remaining targets speak this layout natively. OpenLayers stores
 //! `flatCoordinates` plus ends; Shapely's `to_ragged_array` returns coordinates
@@ -26,10 +24,7 @@ var counts: flat.Counts = .{};
 var flat_result: flat.Block = .{ .bytes = &.{}, .counts = .{} };
 
 export fn geom_clear() void {
-    if (result.len != 0) allocator.free(result);
-    result = &.{};
-    if (flat_result.bytes.len != 0) allocator.free(flat_result.bytes);
-    flat_result = .{ .bytes = &.{}, .counts = .{} };
+    releaseResults();
     if (block.len != 0) allocator.free(block);
     block = &.{};
     counts = .{};
@@ -61,7 +56,12 @@ pub fn status(err: anyerror) u32 {
 /// it. Reserving again, or `geom_clear`, releases the previous one.
 export fn geom_flat_input(coordinates: u32, rings: u32, polygons: u32, line_strings: u32, points: u32) usize {
     counts = .{ .coordinates = coordinates, .rings = rings, .polygons = polygons, .line_strings = line_strings, .points = points };
-    const wanted = flat.size(counts);
+    // Counts that cannot describe a block are refused here, before anything is
+    // allocated, the same way an allocation failure is.
+    const wanted = flat.size(counts) catch {
+        counts = .{};
+        return 0;
+    };
     if (wanted == 0) {
         counts = .{};
         return 0;
@@ -100,7 +100,7 @@ export fn geom_flat_execute(op: u32, subject: u32, distance: f64, steps: u32) u3
 }
 
 fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
-    const borrowed = try flat.view(block[0..flat.size(counts)], counts);
+    const borrowed = try flat.view(block[0..try flat.size(counts)], counts);
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
     const input = try flat.input(scratch.allocator(), borrowed);

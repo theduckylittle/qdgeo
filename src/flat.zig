@@ -35,9 +35,27 @@ pub const Counts = extern struct {
     points: u32 = 0,
 };
 
-pub fn size(counts: Counts) usize {
-    const indices = @as(usize, counts.rings) + counts.polygons + counts.line_strings;
-    return 16 * @as(usize, counts.coordinates) + 4 * indices;
+/// Bytes a block of this shape needs, or `error.LimitExceeded` if the counts
+/// cannot describe one.
+///
+/// `usize` is **32 bits** on wasm32, the shipped target, and every count here
+/// comes straight from an untrusted caller as a `u32`. `16 * coordinates`
+/// therefore overflows for any count above 268,435,455 — long before the
+/// allocator would have refused it. `output` below has always guarded its
+/// counts this way; this is the same guard on the way in.
+pub fn size(counts: Counts) error{LimitExceeded}!usize {
+    const add = struct {
+        fn f(a: usize, b: usize) error{LimitExceeded}!usize {
+            return std.math.add(usize, a, b) catch error.LimitExceeded;
+        }
+    }.f;
+    const mul = struct {
+        fn f(a: usize, b: usize) error{LimitExceeded}!usize {
+            return std.math.mul(usize, a, b) catch error.LimitExceeded;
+        }
+    }.f;
+    const indices = try add(try add(counts.rings, counts.polygons), counts.line_strings);
+    return try add(try mul(16, counts.coordinates), try mul(4, indices));
 }
 
 pub const View = struct {
@@ -53,7 +71,7 @@ pub const View = struct {
 /// Borrowed view of a host-written block. The coordinates are not copied: the
 /// block *is* the point array, which is why `Coordinate` is `extern`.
 pub fn view(block: []align(8) const u8, counts: Counts) !View {
-    if (block.len < size(counts)) return error.MalformedGeometry;
+    if (block.len < try size(counts)) return error.MalformedGeometry;
     const coordinates: [*]const g.Coordinate = @ptrCast(block.ptr);
     const indices: [*]const u32 = @ptrCast(@alignCast(block.ptr + 16 * @as(usize, counts.coordinates)));
     return .{
@@ -108,7 +126,7 @@ pub fn output(a: std.mem.Allocator, polygons: []const g.Polygon) !Block {
                 return error.LimitExceeded) catch return error.LimitExceeded;
         }
     }
-    const bytes = try a.alignedAlloc(u8, .@"8", size(counts));
+    const bytes = try a.alignedAlloc(u8, .@"8", try size(counts));
     const coordinates: [*]g.Coordinate = @ptrCast(bytes.ptr);
     const indices: [*]u32 = @ptrCast(@alignCast(bytes.ptr + 16 * @as(usize, counts.coordinates)));
     var coordinate: u32 = 0;

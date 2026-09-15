@@ -11,14 +11,13 @@ const geo = abi.geo;
 const allocator = abi.allocator;
 const status = abi.status;
 
-export fn geom_alloc(len: usize) usize {
-    if (len == 0) return 0;
-    const bytes = allocator.alloc(u8, len) catch return 0;
-    return @intFromPtr(bytes.ptr);
-}
-export fn geom_free(ptr: usize, len: usize) void {
-    if (ptr != 0 and len != 0) allocator.free(@as([*]u8, @ptrFromInt(ptr))[0..len]);
-}
+/// Input bytes are **borrowed** for the duration of the call: they are parsed
+/// into the library's own allocations and never taken ownership of. A caller
+/// passes a stack array, a `malloc` block or an `mmap`ed file, whichever it
+/// already has. There is no allocate/free pair here, because a native caller
+/// has its own allocator and never needed one — that pairing only makes sense
+/// for a WASM host, which cannot reach into the module's linear memory, and the
+/// WASM build has `geom_flat_input` for exactly that.
 export fn geom_result_ptr() usize {
     return if (abi.result.len == 0) 0 else @intFromPtr(abi.result.ptr);
 }
@@ -27,6 +26,10 @@ export fn geom_result_len() usize {
 }
 
 fn process(ptr: usize, len: usize, distance: ?f64, steps: u32) !void {
+    // A null pointer with a nonzero length is a caller bug, but it has to come
+    // back as a status code like every other malformed input: building the
+    // slice anyway kills the host process instead of failing the call.
+    if (len != 0 and ptr == 0) return error.MalformedGeometry;
     const bytes: []const u8 = if (len == 0) &.{} else @as([*]const u8, @ptrFromInt(ptr))[0..len];
     var input = try geo.wkb.parse(allocator, bytes, .{});
     defer input.deinit();
