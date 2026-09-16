@@ -91,7 +91,7 @@ function decode({ coordinates, ringEnds, polygonEnds }) {
 }
 function wasm(flat, c) {
   const n = flat.coordinates.length / 2;
-  const ptr = w.geom_flat_input(n, flat.ringEnds.length, flat.polygonEnds.length, 0, 0);
+  const ptr = w.geom_input(n, flat.ringEnds.length, flat.polygonEnds.length, 0, 0);
   if (!ptr) throw new Error('WASM input allocation failed');
   new Float64Array(w.memory.buffer, ptr, flat.coordinates.length).set(flat.coordinates);
   const indices = new Uint32Array(
@@ -102,14 +102,12 @@ function wasm(flat, c) {
   indices.set(flat.ringEnds);
   indices.set(flat.polygonEnds, flat.ringEnds.length);
   const status =
-    c.operation === 'union'
-      ? w.geom_flat_execute(0, 0, 0, 0)
-      : w.geom_flat_execute(4, 0, c.distance, c.steps);
+    c.operation === 'union' ? w.geom_apply(0, 0, 0, 0) : w.geom_apply(4, 0, c.distance, c.steps);
   if (status) throw new Error(`WASM status ${status}`);
-  const out = w.geom_flat_result_ptr();
-  const nc = w.geom_flat_result_coordinates();
-  const nr = w.geom_flat_result_rings();
-  const np = w.geom_flat_result_polygons();
+  const out = w.geom_result_ptr();
+  const nc = w.geom_result_coordinates();
+  const nr = w.geom_result_rings();
+  const np = w.geom_result_polygons();
   const ends = new Uint32Array(w.memory.buffer, out + 16 * nc, nr + np);
   return {
     coordinates: new Float64Array(w.memory.buffer, out, 2 * nc).slice(),

@@ -59,19 +59,19 @@ STATUS = {
 
 
 class Qdgeo:
-    """The flat ABI, through ctypes. Same entry points the browser uses."""
+    """The coordinate ABI, through ctypes. Same entry points the browser uses."""
 
     def __init__(self, path=LIBRARY):
         if not path.exists():
             sys.exit(f'{path} is missing — run: zig build native -Doptimize=ReleaseSafe')
         self.lib = C.CDLL(str(path))
-        self.lib.geom_flat_input.restype = C.c_void_p
-        self.lib.geom_flat_input.argtypes = [C.c_uint32] * 5
-        self.lib.geom_flat_execute.restype = C.c_uint32
-        self.lib.geom_flat_execute.argtypes = [C.c_uint32, C.c_uint32, C.c_double, C.c_uint32]
-        self.lib.geom_flat_result_ptr.restype = C.c_void_p
+        self.lib.geom_input.restype = C.c_void_p
+        self.lib.geom_input.argtypes = [C.c_uint32] * 5
+        self.lib.geom_apply.restype = C.c_uint32
+        self.lib.geom_apply.argtypes = [C.c_uint32, C.c_uint32, C.c_double, C.c_uint32]
+        self.lib.geom_result_ptr.restype = C.c_void_p
         for name in ('coordinates', 'rings', 'polygons'):
-            getattr(self.lib, f'geom_flat_result_{name}').restype = C.c_uint32
+            getattr(self.lib, f'geom_result_{name}').restype = C.c_uint32
 
     def run(self, parts, op, subject=0, distance=0.0, steps=QUADRANT_SEGMENTS):
         """`parts` is (points, lines, polygons) in the flat block's own order."""
@@ -89,7 +89,7 @@ class Qdgeo:
             polygon_ends.append(len(ring_ends))
 
         total = len(coordinates)
-        block = self.lib.geom_flat_input(
+        block = self.lib.geom_input(
             total, len(ring_ends), len(polygon_ends), len(line_ends), len(points)
         )
         if not block and total:
@@ -103,18 +103,18 @@ class Qdgeo:
             for i, v in enumerate(ring_ends + polygon_ends + line_ends):
                 indices[i] = v
 
-        status = self.lib.geom_flat_execute(OPS[op], subject, distance, steps)
+        status = self.lib.geom_apply(OPS[op], subject, distance, steps)
         if status:
             raise RuntimeError(STATUS.get(status, f'status {status}'))
         return self._result()
 
     def _result(self):
-        total = self.lib.geom_flat_result_coordinates()
-        rings = self.lib.geom_flat_result_rings()
-        shapes = self.lib.geom_flat_result_polygons()
+        total = self.lib.geom_result_coordinates()
+        rings = self.lib.geom_result_rings()
+        shapes = self.lib.geom_result_polygons()
         if not total:
             return shapely.from_wkt('MULTIPOLYGON EMPTY')
-        base = self.lib.geom_flat_result_ptr()
+        base = self.lib.geom_result_ptr()
         xy = (C.c_double * (2 * total)).from_address(base)
         ends = (C.c_uint32 * (rings + shapes)).from_address(base + 16 * total)
         out, ring, point = [], 0, 0

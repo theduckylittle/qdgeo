@@ -3,10 +3,14 @@
   "description": "Quick & Dirty Geographic Library: buffer and boolean geometry for the browser, in Zig.",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./js/qdgeo.js"
+  },
   "license": "MIT",
   "author": "Dan \"Ducky\" Little",
   "scripts": {
     "test:wasm": "node tests/wasm.mjs",
+    "test:binding": "node tests/binding.mjs",
     "compare": ".venv/bin/python tests/compare/run.py",
     "format": "prettier --write \"**/*.{js,mjs,html}\"",
     "format:check": "prettier --check \"**/*.{js,mjs,html}\"",

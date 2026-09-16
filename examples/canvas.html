@@ -84,7 +84,7 @@
 </div>
 
 <script type="module">
-  import { load, OP, regular, star, close } from './lib/geometry.js';
+  import { load, regular, star, close } from './lib/qdgeo.js';
 
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
@@ -156,10 +156,25 @@
     let result = [],
       note = '';
     try {
-      // Buffer takes every polygon at once; the boolean ops split them into two
-      // operands, and `subject` says how many leading polygons form the first.
-      const input = { polygons: buffering ? [a] : [a, b] };
-      result = geo.run(input, OP[op()], { subject: 1, distance, steps: 16 });
+      // Each operation has its own method; the switch is the whole of what the
+      // op selector means.
+      switch (op()) {
+        case 'buffer':
+          result = geo.buffer([a], distance);
+          break;
+        case 'union':
+          result = geo.union([a, b], { distance });
+          break;
+        case 'intersection':
+          result = geo.intersection([a], [b], { distance });
+          break;
+        case 'difference':
+          result = geo.difference([a], [b], { distance });
+          break;
+        case 'symmetricDifference':
+          result = geo.symmetricDifference([a], [b], { distance });
+          break;
+      }
     } catch (error) {
       note = `<span class="err">${error.message}</span>`;
     }

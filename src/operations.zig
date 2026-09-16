@@ -6,7 +6,9 @@ const offset = @import("offset.zig");
 const sweep = @import("sweep.zig");
 const pred = @import("predicates.zig");
 
-pub const UnionOptions = struct {
+/// Options for the four boolean operations. Named for what takes it, not for
+/// the one operation that used to.
+pub const BooleanOptions = struct {
     limits: g.Limits = .{},
 };
 pub const BufferOptions = struct {
@@ -52,7 +54,7 @@ pub fn boolean(
     subject: []const g.Polygon,
     clip: []const g.Polygon,
     mode: g.Mode,
-    options: UnionOptions,
+    options: BooleanOptions,
 ) !g.Geometry {
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
@@ -65,21 +67,14 @@ pub fn boolean(
 }
 
 /// N-ary union: everything is one operand, so overlapping input simply stacks.
-pub fn unionAll(a: std.mem.Allocator, polygons: []const g.Polygon, options: UnionOptions) !g.Geometry {
+pub fn unionAll(a: std.mem.Allocator, polygons: []const g.Polygon, options: BooleanOptions) !g.Geometry {
     return boolean(a, polygons, &.{}, .union_all, options);
-}
-
-pub fn buffer(a: std.mem.Allocator, polygon: g.Polygon, distance: f64) !g.Geometry {
-    return bufferAll(a, &.{polygon}, distance, .{});
-}
-pub fn bufferWithOptions(a: std.mem.Allocator, polygon: g.Polygon, distance: f64, options: BufferOptions) !g.Geometry {
-    return bufferAll(a, &.{polygon}, distance, options);
 }
 
 /// Everything a buffer can be asked to grow. Areal input is unioned first so
 /// overlapping polygons behave as one region; the rest contributes only when the
 /// distance is positive, because a point and a line have no interior to erode.
-pub const Input = struct {
+pub const BufferInput = struct {
     polygons: []const g.Polygon = &.{},
     line_strings: []const g.LineString = &.{},
     points: []const g.Coordinate = &.{},
@@ -167,7 +162,7 @@ fn normalized(a: std.mem.Allocator, polygons: []const g.Polygon, limits: g.Limit
 /// overlay keeps what those curves wind at least once. Inward collapse, neck
 /// splitting and the spurious loops an offset curve makes at a concavity all
 /// fall out of that count rather than out of repair heuristics.
-pub fn bufferInput(a: std.mem.Allocator, input: Input, distance: f64, options: BufferOptions) !g.Geometry {
+pub fn buffer(a: std.mem.Allocator, input: BufferInput, distance: f64, options: BufferOptions) !g.Geometry {
     if (!std.math.isFinite(distance)) return error.NonFiniteCoordinate;
     if (@abs(distance) > 1e140) return error.CoordinateRange;
     if (options.quadrant_segments < 1 or options.quadrant_segments > 1024) return error.InvalidOptions;
@@ -267,6 +262,8 @@ pub fn bufferInput(a: std.mem.Allocator, input: Input, distance: f64, options: B
     return sweep.execute(a, paths.items, .union_all, limits);
 }
 
+/// Buffer polygons. The common case, and the same thing as calling `buffer`
+/// with only `polygons` set.
 pub fn bufferAll(a: std.mem.Allocator, polygons: []const g.Polygon, distance: f64, options: BufferOptions) !g.Geometry {
-    return bufferInput(a, .{ .polygons = polygons }, distance, options);
+    return buffer(a, .{ .polygons = polygons }, distance, options);
 }

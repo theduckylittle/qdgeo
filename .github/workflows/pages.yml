@@ -38,6 +38,8 @@ jobs:
           mkdir -p site
           cp -r examples/. site/
           cp zig-out/bin/qdgeo.wasm site/vendor/qdgeo.wasm
+          # The binding is the library's, kept in js/ and copied in here.
+          cp js/qdgeo.js site/lib/qdgeo.js
           # README.md is for the repository, not the published site.
           rm -f site/README.md site/vendor/README.md
           ls -R site
@@ -48,7 +50,7 @@ jobs:
             test -s "site/$page.html" || { echo "missing site/$page.html"; exit 1; }
           done
           test -s site/vendor/qdgeo.wasm
-          test -s site/lib/geometry.js
+          test -s site/lib/qdgeo.js
           test -s site/lib/examples.css
           echo "site is complete"
 

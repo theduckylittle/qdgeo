@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Dan "Ducky" Little
 // Run after `zig build wasm`: node tests/wasm.mjs
 //
-// The browser artifact carries the flat ABI and nothing else. WKB is native
+// The browser artifact carries the coordinate ABI and nothing else. WKB is native
 // only; `tests/compare/run.py` covers it there.
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
@@ -18,13 +18,7 @@ function flat(
   operation,
 ) {
   const n = coordinates.length / 2;
-  const ptr = w.geom_flat_input(
-    n,
-    ringEnds.length,
-    polygonEnds.length,
-    lineStringEnds.length,
-    points,
-  );
+  const ptr = w.geom_input(n, ringEnds.length, polygonEnds.length, lineStringEnds.length, points);
   assert.notEqual(ptr, 0);
   // One bulk copy each, no per-coordinate work.
   new Float64Array(w.memory.buffer, ptr, coordinates.length).set(coordinates);
@@ -38,10 +32,10 @@ function flat(
   indices.set(lineStringEnds, ringEnds.length + polygonEnds.length);
   assert.equal(operation(), 0);
   // An operation can grow memory, so every view is rebuilt afterwards.
-  const out = w.geom_flat_result_ptr();
-  const nc = w.geom_flat_result_coordinates();
-  const nr = w.geom_flat_result_rings();
-  const np = w.geom_flat_result_polygons();
+  const out = w.geom_result_ptr();
+  const nc = w.geom_result_coordinates();
+  const nr = w.geom_result_rings();
+  const np = w.geom_result_polygons();
   const ends = new Uint32Array(w.memory.buffer, out + 16 * nc, nr + np);
   return {
     coordinates: new Float64Array(w.memory.buffer, out, 2 * nc).slice(),
@@ -72,18 +66,16 @@ const united = flat(
     ringEnds: [5, 10],
     polygonEnds: [1, 2],
   },
-  () => w.geom_flat_execute(OP.union, 0, 0, 0),
+  () => w.geom_apply(OP.union, 0, 0, 0),
 );
 assert.equal(area(united), 7);
 assert.equal(united.polygonEnds.length, 1);
 
 // A Point buffers to a disc, an open LineString to a stadium.
-const disc = flat({ coordinates: [7, -3], points: 1 }, () =>
-  w.geom_flat_execute(OP.buffer, 0, 10, 16),
-);
+const disc = flat({ coordinates: [7, -3], points: 1 }, () => w.geom_apply(OP.buffer, 0, 10, 16));
 assert.ok(Math.abs(area(disc) - Math.PI * 100) < Math.PI);
 const stadium = flat({ coordinates: [0, 0, 100, 0], lineStringEnds: [2] }, () =>
-  w.geom_flat_execute(OP.buffer, 0, 10, 16),
+  w.geom_apply(OP.buffer, 0, 10, 16),
 );
 assert.ok(Math.abs(area(stadium) - (2000 + Math.PI * 100)) < 25);
 
@@ -94,7 +86,7 @@ const donut = flat(
     ringEnds: [5, 10],
     polygonEnds: [2],
   },
-  () => w.geom_flat_execute(OP.union, 0, 0, 0),
+  () => w.geom_apply(OP.union, 0, 0, 0),
 );
 assert.equal(donut.ringEnds.length, 2);
 assert.equal(area(donut), 84);
@@ -104,7 +96,7 @@ for (let i = 0; i < 20; i++) {
   assert.equal(
     area(
       flat({ coordinates: square(0, 0, 2, 2), ringEnds: [5], polygonEnds: [1] }, () =>
-        w.geom_flat_execute(OP.buffer, 0, -3, 16),
+        w.geom_apply(OP.buffer, 0, -3, 16),
       ),
     ),
     0,
@@ -123,25 +115,25 @@ for (const [op, expected] of [
   [OP.difference, 3],
   [OP.symmetricDifference, 6],
 ]) {
-  assert.equal(area(flat(pair, () => w.geom_flat_execute(op, 1, 0, 0))), expected);
+  assert.equal(area(flat(pair, () => w.geom_apply(op, 1, 0, 0))), expected);
 }
 // A nonzero distance buffers the result of a boolean operation, so a host gets
 // "intersect, then grow" in one crossing. The intersection is the unit square
 // (1, 1)-(2, 2); growing it by 1 adds its perimeter and four quarter-circles.
-const grown = area(flat(pair, () => w.geom_flat_execute(OP.intersection, 1, 1, 16)));
+const grown = area(flat(pair, () => w.geom_apply(OP.intersection, 1, 1, 16)));
 assert.ok(
   Math.abs(grown - (1 + 4 + Math.PI)) < 0.02,
   `intersection buffered by 1 should be about ${(1 + 4 + Math.PI).toFixed(3)}, got ${grown}`,
 );
 // Zero leaves a boolean result exactly as it was.
-assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 16))), 7);
+assert.equal(area(flat(pair, () => w.geom_apply(OP.union, 1, 0, 16))), 7);
 // A negative distance erodes the result rather than growing it.
-const eroded = area(flat(pair, () => w.geom_flat_execute(OP.union, 1, -0.25, 16)));
+const eroded = area(flat(pair, () => w.geom_apply(OP.union, 1, -0.25, 16)));
 assert.ok(eroded > 0 && eroded < 7, `union eroded by 0.25 should shrink, got ${eroded}`);
 
 // Difference is asymmetric: giving both squares to the subject leaves nothing to cut.
-assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.difference, 2, 0, 0))), 7);
-assert.equal(w.geom_flat_execute(9, 0, 0, 0), 6);
+assert.equal(area(flat(pair, () => w.geom_apply(OP.difference, 2, 0, 0))), 7);
+assert.equal(w.geom_apply(9, 0, 0, 0), 6);
 
 // Counts come from the page and are u32, while `usize` is 32 bits on wasm32, so
 // 16 * coordinates overflows above 268,435,455. That used to trap the module;
@@ -151,10 +143,10 @@ for (const counts of [
   [0, 3000000000, 2000000000, 0, 0], // the index counts overflow between them
   [4294967295, 4294967295, 4294967295, 4294967295, 0], // everything at the maximum
 ]) {
-  assert.equal(w.geom_flat_input(...counts), 0, `counts ${counts} should be refused, not trap`);
+  assert.equal(w.geom_input(...counts), 0, `counts ${counts} should be refused, not trap`);
 }
 // And the module is still usable afterwards.
-assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 0))), 7);
+assert.equal(area(flat(pair, () => w.geom_apply(OP.union, 1, 0, 0))), 7);
 w.geom_clear();
 
 // An allocation the 512 MiB heap cannot satisfy has to come back as a status
@@ -178,14 +170,14 @@ w.geom_clear();
   }
   ring[2 * (n - 1)] = ring[0];
   ring[2 * (n - 1) + 1] = ring[1];
-  const ptr = w.geom_flat_input(n, 1, 1, 0, 0);
+  const ptr = w.geom_input(n, 1, 1, 0, 0);
   assert.notEqual(ptr, 0, 'the input block itself should still be accepted');
   new Float64Array(w.memory.buffer, ptr, 2 * n).set(ring);
   new Uint32Array(w.memory.buffer, ptr + 16 * n, 2).set([n, 1]);
 
   let status;
   try {
-    status = w.geom_flat_execute(OP.buffer, 1, 5000, 16);
+    status = w.geom_apply(OP.buffer, 1, 5000, 16);
   } catch (error) {
     assert.fail(`exhaustion trapped instead of returning a status: ${error.message}`);
   }
@@ -193,8 +185,8 @@ w.geom_clear();
   w.geom_clear();
 
   // The whole point of status 1: the next call still works.
-  assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 0))), 7);
+  assert.equal(area(flat(pair, () => w.geom_apply(OP.union, 1, 0, 0))), 7);
   w.geom_clear();
 }
 
-console.log('WASM runtime checks passed (flat ABI, four boolean ops, no imports)');
+console.log('WASM runtime checks passed (coordinate ABI, four boolean ops, no imports)');

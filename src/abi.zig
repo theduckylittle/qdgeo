@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Dan "Ducky" Little
-//! Single-threaded host ABI: flat coordinate blocks in, flat blocks out.
+//! The host ABI: one coordinate block in, one out.
 //!
 //! This is the whole surface the browser gets, and the browser is 90% of the
 //! target. WKB lives in `abi_wkb.zig` and links only into the native library:
@@ -46,15 +46,17 @@ pub fn status(err: anyerror) u32 {
     };
 }
 
-// --- Flat coordinate ABI -----------------------------------------------------
+// --- The coordinate ABI ------------------------------------------------------
 //
 // One block in, one block out, in the layout OpenLayers already holds. See
-// `src/flat.zig` for the layout; `tests/wasm.mjs` has a working host.
+// `src/flat.zig` for the layout; `tests/wasm.mjs` has a working host. There is
+// no other shape to contrast this with, so nothing here says "flat": the WKB
+// entry points in `abi_wkb.zig` are the ones that need a qualifier.
 
 /// Reserve the input block and hand back its address. The host then writes
 /// `2 * coordinates` f64 followed by `rings + polygons + line_strings` u32 into
 /// it. Reserving again, or `geom_clear`, releases the previous one.
-export fn geom_flat_input(coordinates: u32, rings: u32, polygons: u32, line_strings: u32, points: u32) usize {
+export fn geom_input(coordinates: u32, rings: u32, polygons: u32, line_strings: u32, points: u32) usize {
     counts = .{ .coordinates = coordinates, .rings = rings, .polygons = polygons, .line_strings = line_strings, .points = points };
     // Counts that cannot describe a block are refused here, before anything is
     // allocated, the same way an allocation failure is.
@@ -93,7 +95,7 @@ export fn geom_flat_input(coordinates: u32, rings: u32, polygons: u32, line_stri
 /// so "intersect these, then grow the overlap by 5 m" is one call. Zero leaves
 /// a boolean result alone, which is what a host that never wants a buffer
 /// already passes. `steps` is segments per quarter circle on a rounded corner.
-export fn geom_flat_execute(op: u32, subject: u32, distance: f64, steps: u32) u32 {
+export fn geom_apply(op: u32, subject: u32, distance: f64, steps: u32) u32 {
     releaseResults();
     run(op, subject, distance, steps) catch |err| return status(err);
     return 0;
@@ -105,7 +107,7 @@ fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
     defer scratch.deinit();
     const input = try flat.input(scratch.allocator(), borrowed);
     if (op == 4) {
-        var output = try geo.bufferInput(allocator, input, distance, .{ .quadrant_segments = steps });
+        var output = try geo.buffer(allocator, input, distance, .{ .quadrant_segments = steps });
         defer output.deinit();
         flat_result = try flat.output(allocator, output.polygons);
         return;
@@ -142,15 +144,15 @@ pub fn releaseResults() void {
     flat_result = .{ .bytes = &.{}, .counts = .{} };
 }
 
-export fn geom_flat_result_ptr() usize {
+export fn geom_result_ptr() usize {
     return if (flat_result.bytes.len == 0) 0 else @intFromPtr(flat_result.bytes.ptr);
 }
-export fn geom_flat_result_coordinates() u32 {
+export fn geom_result_coordinates() u32 {
     return flat_result.counts.coordinates;
 }
-export fn geom_flat_result_rings() u32 {
+export fn geom_result_rings() u32 {
     return flat_result.counts.rings;
 }
-export fn geom_flat_result_polygons() u32 {
+export fn geom_result_polygons() u32 {
     return flat_result.counts.polygons;
 }

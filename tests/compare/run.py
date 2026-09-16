@@ -35,21 +35,21 @@ def measure(fn, repeats):
 class Native:
     def __init__(self):
         self.lib = C.CDLL(str(ROOT / 'zig-out/lib/libqdgeo_native.so'))
-        self.lib.geom_union.argtypes = [C.c_void_p, C.c_size_t]
-        self.lib.geom_buffer_with_options.argtypes = [C.c_void_p, C.c_size_t, C.c_double, C.c_uint32]
-        self.lib.geom_result_ptr.restype = C.c_void_p
-        self.lib.geom_result_len.restype = C.c_size_t
+        self.lib.geom_wkb_union.argtypes = [C.c_void_p, C.c_size_t]
+        self.lib.geom_wkb_buffer.argtypes = [C.c_void_p, C.c_size_t, C.c_double, C.c_uint32]
+        self.lib.geom_wkb_result_ptr.restype = C.c_void_p
+        self.lib.geom_wkb_result_len.restype = C.c_size_t
     def run(self, blob, c):
         # The library borrows these bytes for the call and never takes ownership,
         # so Python keeps them. The result is copied before geom_clear releases it.
         try:
             if c['operation'] == 'union':
-                status = self.lib.geom_union(blob, len(blob))
+                status = self.lib.geom_wkb_union(blob, len(blob))
             else:
-                status = self.lib.geom_buffer_with_options(blob, len(blob), c['distance'], c['steps'])
+                status = self.lib.geom_wkb_buffer(blob, len(blob), c['distance'], c['steps'])
             if status:
                 raise RuntimeError(f'native status {status}')
-            return C.string_at(self.lib.geom_result_ptr(), self.lib.geom_result_len())
+            return C.string_at(self.lib.geom_wkb_result_ptr(), self.lib.geom_wkb_result_len())
         finally:
             self.lib.geom_clear()
 

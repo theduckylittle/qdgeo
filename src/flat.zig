@@ -85,7 +85,7 @@ pub fn view(block: []align(8) const u8, counts: Counts) !View {
 
 /// Cut the block into borrowed polygons, lines and points. Only the small index
 /// structures are allocated; every coordinate slice points into the block.
-pub fn input(a: std.mem.Allocator, v: View) !operations.Input {
+pub fn input(a: std.mem.Allocator, v: View) !operations.BufferInput {
     if (v.points > v.coordinates.len) return error.MalformedGeometry;
     var cursor: usize = v.points;
 
