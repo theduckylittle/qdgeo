@@ -44,10 +44,10 @@ def main():
 
     parts = parcels()
     lib = C.CDLL(str(LIB))
-    lib.geom_buffer_with_options.argtypes = [C.c_size_t, C.c_size_t, C.c_double, C.c_uint32]
-    lib.geom_buffer_with_options.restype = C.c_uint32
-    lib.geom_union.argtypes = [C.c_size_t, C.c_size_t]
-    lib.geom_union.restype = C.c_uint32
+    lib.geom_wkb_buffer.argtypes = [C.c_size_t, C.c_size_t, C.c_double, C.c_uint32]
+    lib.geom_wkb_buffer.restype = C.c_uint32
+    lib.geom_wkb_union.argtypes = [C.c_size_t, C.c_size_t]
+    lib.geom_wkb_union.restype = C.c_uint32
 
     groups = (2, 4) if args.quick else (2, 4, 8, 16)
     distances, steps = (0.5, 2, 5, -0.5, -2), (1, 4, 16)
@@ -59,7 +59,7 @@ def main():
             for d in distances:
                 for q in steps:
                     n_buf += 1
-                    if lib.geom_buffer_with_options(C.addressof(buf), len(blob), d, q) != 0:
+                    if lib.geom_wkb_buffer(C.addressof(buf), len(blob), d, q) != 0:
                         bad_buf.append((k, s, d, q))
     print(f'cluster buffers: {len(bad_buf):5d} of {n_buf} fail   {time.perf_counter() - t0:5.1f}s')
 
@@ -69,7 +69,7 @@ def main():
             blob = MultiPolygon(parts[s:s + k]).wkb
             buf = C.create_string_buffer(blob, len(blob))
             n_uni += 1
-            if lib.geom_union(C.addressof(buf), len(blob)) != 0:
+            if lib.geom_wkb_union(C.addressof(buf), len(blob)) != 0:
                 bad_uni.append((k, s))
     print(f'cluster unions:  {len(bad_uni):5d} of {n_uni} fail   {time.perf_counter() - t0:5.1f}s')
     if bad_uni:

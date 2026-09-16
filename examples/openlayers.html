@@ -40,7 +40,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/ol@10.3.1/dist/ol.js"></script>
 <script type="module">
-  import { load, OP, regular, star } from './lib/geometry.js';
+  import { load, regular, star } from './lib/qdgeo.js';
 
   const geo = await load('./vendor/qdgeo.wasm');
   const out = document.getElementById('out');
@@ -103,11 +103,26 @@
     const b = fromOpenLayers(shapeB.getGeometry());
     results.clear();
     try {
-      const polygons = geo.run({ polygons: buffering ? [a] : [a, b] }, OP[op()], {
-        subject: 1,
-        distance,
-        steps: 16,
-      });
+      let polygons = [];
+      // Each operation has its own method; the switch is the whole of what the
+      // op selector means.
+      switch (op()) {
+        case 'buffer':
+          polygons = geo.buffer([a], distance);
+          break;
+        case 'union':
+          polygons = geo.union([a, b], { distance });
+          break;
+        case 'intersection':
+          polygons = geo.intersection([a], [b], { distance });
+          break;
+        case 'difference':
+          polygons = geo.difference([a], [b], { distance });
+          break;
+        case 'symmetricDifference':
+          polygons = geo.symmetricDifference([a], [b], { distance });
+          break;
+      }
       if (polygons.length) results.addFeature(new ol.Feature(toOpenLayers(polygons)));
       const rings = polygons.reduce((n, p) => n + p.length, 0);
       const points = polygons.reduce((n, p) => n + p.reduce((m, r) => m + r.length, 0), 0);

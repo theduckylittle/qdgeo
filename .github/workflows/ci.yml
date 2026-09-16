@@ -53,6 +53,9 @@ jobs:
       - name: WASM runtime checks
         run: npm run test:wasm
 
+      - name: JavaScript binding
+        run: npm run test:binding
+
       - name: Formatting
         run: npm run format:check
 

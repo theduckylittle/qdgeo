@@ -57,35 +57,35 @@ are correct almost everywhere and an order of magnitude slower.
 zig build wasm     # zig-out/bin/qdgeo.wasm, freestanding + simd128
 ```
 
-The module needs no host functions, so it instantiates with an empty import
-object:
+[`js/qdgeo.js`](js/qdgeo.js) is the binding. A shape is a list of rings, each a
+list of `[x, y]`, shell first and holes after:
 
 ```js
-const bytes = await (await fetch('qdgeo.wasm')).arrayBuffer();
-const { instance } = await WebAssembly.instantiate(bytes, {});
-const q = instance.exports;
+import { load } from './js/qdgeo.js';
+const geo = await load('qdgeo.wasm');
 
-// Two overlapping squares, one polygon each. Every ring must close.
-const coords = [0, 0, 10, 0, 10, 10, 0, 10, 0, 0, 5, 5, 15, 5, 15, 15, 5, 15, 5, 5];
-const ringEnds = [5, 10]; // exclusive ends, counted in coordinates
-const polygonEnds = [1, 2]; // exclusive ends, counted in rings
-const total = coords.length / 2;
+const square = (x, y, w) => [
+  [[x, y], [x + w, y], [x + w, y + w], [x, y + w], [x, y]],
+];
+const a = square(0, 0, 10);
+const b = square(5, 5, 10);
 
-const ptr = q.geom_flat_input(total, ringEnds.length, polygonEnds.length, 0, 0);
-new Float64Array(q.memory.buffer, ptr, coords.length).set(coords);
-new Uint32Array(q.memory.buffer, ptr + 16 * total, ringEnds.length + polygonEnds.length)
-  .set([...ringEnds, ...polygonEnds]);
-
-const status = q.geom_flat_execute(0, 1, 0, 0); // op 0 = union
-if (status) throw new Error(`qdgeo status ${status}`);
-
-const n = q.geom_flat_result_coordinates(); // 9 coordinates, one ring, area 175
-const xy = new Float64Array(q.memory.buffer, q.geom_flat_result_ptr(), 2 * n);
-q.geom_clear();
+geo.union([a, b]); // one shape, area 175
+geo.intersection([a], [b]); // the overlap
+geo.difference([a], [b]); // a with b cut out
+geo.symmetricDifference([a], [b]);
+geo.buffer([a], 2); // grown by 2; negative shrinks
+geo.buffer([a], 2, { steps: 32 }); // finer arcs
 ```
 
-That is the whole interface. [Host ABI](#host-abi) describes the block layout
-and the seven exports.
+Each returns a list of shapes in the same form. The binary operations take two
+operand lists, so either side can hold several shapes; `union` and `buffer` are
+n-ary over one list.
+
+The module needs no host functions and instantiates with an empty import
+object, so calling it directly is reasonable too — `geo.apply(op, a, b, opts)`
+is the generic form, and [Host ABI](#host-abi) describes the block layout and
+the seven exports.
 
 ### Examples
 
@@ -98,11 +98,12 @@ To run them locally:
 
 ```sh
 zig build wasm && cp zig-out/bin/qdgeo.wasm examples/vendor/
+cp js/qdgeo.js examples/lib/
 python3 -m http.server -d examples 8000   # then open http://localhost:8000/
 ```
 
-`examples/lib/geometry.js` wraps the ABI in about a hundred lines if you would
-rather not call it directly. See [examples/README.md](examples/README.md).
+The binding lives in [`js/`](js/) and is copied into the example doc root by the
+command above. See [examples/README.md](examples/README.md).
 
 ### Building everything else
 
@@ -412,23 +413,29 @@ Every geometry type falls out of that layout. A Point is one coordinate. A
 MultiLineString is the line strings. A MultiPolygon is the rings, cut into
 polygons by the polygon ends. A GeometryCollection is all three at once.
 
+There is only one input shape, so no export says "flat". The names that carry a
+qualifier are the WKB ones below, because those are the conversion path.
+
 Single-threaded and non-reentrant:
 
-- `geom_flat_input(coordinates, rings, polygons, line_strings, points) -> ptr` —
+- `geom_input(coordinates, rings, polygons, line_strings, points) -> ptr` —
   reserve the block and get its address. Reused across calls when big enough.
-- `geom_flat_execute(op, subject, distance, steps) -> status` — `op` is
+- `geom_apply(op, subject, distance, steps) -> status` — `op` is
   0 union, 1 intersection, 2 difference, 3 symmetric difference, 4 buffer.
   `subject` is how many leading polygons form the first operand; the rest are
   the second. A new operation costs a value here, not another export.
+
+  The binding hides `subject`: its binary methods take two operand lists and
+  work the split out, which is the same thing said in a way a caller can read.
 
   `distance` applies to **every** operation, not only op 4. On a boolean
   operation a nonzero distance buffers the result, so "intersect these two, then
   grow the overlap by 5 m" is a single call and the intermediate geometry never
   crosses the boundary. Pass `0` to leave a boolean result alone. `steps` is
   segments per quarter circle on a rounded corner.
-- `geom_flat_result_ptr()`, `geom_flat_result_coordinates()`,
-  `geom_flat_result_rings()`, `geom_flat_result_polygons()` — results are always
-  areal, so the result block carries coordinates, ring ends, and polygon ends.
+- `geom_result_ptr()`, `geom_result_coordinates()`, `geom_result_rings()`,
+  `geom_result_polygons()` — results are always areal, so the result block
+  carries coordinates, ring ends, and polygon ends.
 - `geom_clear()` releases the result.
 
 Status: 0 success, 1 allocation error where recoverable, 2 unsupported geometry,
@@ -442,11 +449,22 @@ which is rare but happens to input that is entirely valid.
 ### WKB, native only
 
 The browser is 90% of the target and is size-sensitive, so WKB is kept out of
-the WASM build entirely. The flat block is the whole browser surface: seven
-exports, no parser, no writer.
+the WASM build entirely. The coordinate block is the whole browser surface:
+seven exports, no parser, no writer.
 
 The native library keeps WKB, because that is how qdgeo reaches GeoParquet,
 PostGIS, and the comparison suite. A Python module would link the same path.
+These are conversion conveniences for a host that already holds WKB, which is
+why they are the ones carrying a qualifier:
+
+- `geom_wkb_union(ptr, len) -> status`
+- `geom_wkb_buffer(ptr, len, distance, steps) -> status`
+- `geom_wkb_result_ptr()`, `geom_wkb_result_len()`
+
+Input bytes are borrowed for the duration of the call. Results go through
+`geom_clear()` like any other. The four boolean operations are not all here:
+WKB exists to convert, and a host that wants intersection or difference is
+better served by the coordinate block, which has them for free.
 
 ## Zig API
 
@@ -483,15 +501,18 @@ value. Results never borrow input storage.
 
 ### Operations
 
-- `unionAll(allocator, polygons, UnionOptions) !Geometry` is an n-ary union.
-  Valid input topology is a precondition and is not fully validated. Input
-  winding and repeated points are normalised before overlay.
-- `buffer(allocator, polygon, distance)` uses default rounded joins, and
-  `bufferWithOptions` configures them. `bufferInput(allocator, Input, distance,
-  BufferOptions)` takes polygons, lines, and points together: a point buffers to
-  a disc, a line to a stadium, and neither survives a negative distance. Areal
-  input is unioned first. Holes, splitting, and collapse are all supported. Zero
-  distance runs union and normalisation, not a byte-identical copy.
+- `boolean(allocator, subject, clip, Mode, BooleanOptions) !Geometry` is all
+  four boolean operations; `Mode` is the only thing that separates them.
+  `unionAll(allocator, polygons, BooleanOptions) !Geometry` is the n-ary union
+  over one list. Valid input topology is a precondition and is not fully
+  validated. Input winding and repeated points are normalised before overlay.
+- `buffer(allocator, BufferInput, distance, BufferOptions) !Geometry` takes
+  polygons, lines, and points together: a point buffers to a disc, a line to a
+  stadium, and neither survives a negative distance. `bufferAll(allocator,
+  polygons, distance, BufferOptions)` is the same call with only polygons, which
+  is the common case. Areal input is unioned first. Holes, splitting, and
+  collapse are all supported. Zero distance runs union and normalisation, not a
+  byte-identical copy.
 
 Buffer uses the JTS/GEOS construction: one raw, self-intersecting offset curve
 per ring, line, and point, resolved by the overlay's winding depth. See
@@ -500,7 +521,7 @@ simplification is off by default — it costs `0.01 * distance` of accuracy and
 buys nothing here — and there is no reduced-precision retry ladder.
 
 **Floating precision only.** There is no precision option, no integer lattice,
-and no snapping; see [Invalid input](#invalid-input) for why. `UnionOptions`
+and no snapping; see [Invalid input](#invalid-input) for why. `BooleanOptions`
 carries segment, point, and work limits. `BufferOptions` adds
 `quadrant_segments` (1..1024, default 16). Output limits are checked **after**
 solution construction, not as an allocation budget.

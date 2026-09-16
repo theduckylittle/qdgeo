@@ -27,10 +27,10 @@ ROOT = Path(__file__).resolve().parents[4]
 
 def engine(path):
     lib = C.CDLL(str(path))
-    lib.geom_union.argtypes = [C.c_size_t, C.c_size_t]
-    lib.geom_union.restype = C.c_uint32
-    lib.geom_buffer_with_options.argtypes = [C.c_size_t, C.c_size_t, C.c_double, C.c_uint32]
-    lib.geom_buffer_with_options.restype = C.c_uint32
+    lib.geom_wkb_union.argtypes = [C.c_size_t, C.c_size_t]
+    lib.geom_wkb_union.restype = C.c_uint32
+    lib.geom_wkb_buffer.argtypes = [C.c_size_t, C.c_size_t, C.c_double, C.c_uint32]
+    lib.geom_wkb_buffer.restype = C.c_uint32
     return lib
 
 
@@ -63,8 +63,8 @@ def main():
         blob = MultiPolygon([parts[i] for i in idx]).wkb
         buf = C.create_string_buffer(blob, len(blob))
         if args.op == 'union':
-            return lib.geom_union(C.addressof(buf), len(blob))
-        return lib.geom_buffer_with_options(C.addressof(buf), len(blob), args.distance, args.steps)
+            return lib.geom_wkb_union(C.addressof(buf), len(blob))
+        return lib.geom_wkb_buffer(C.addressof(buf), len(blob), args.distance, args.steps)
 
     def interesting(idx):
         if not idx or status(now, idx) == 0:

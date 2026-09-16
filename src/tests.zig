@@ -128,12 +128,12 @@ test "union empty, reversed winding, sloped edges and limits" {
 test "rounded rectangle buffer positive, zero, negative and collapse" {
     const r = rect(0, 0, 4, 4);
     for ([_]f64{ 1, 0, -1, -2, -3 }, [_]f64{ 32 + std.math.pi, 16, 4, 0, 0 }) |d, expected| {
-        var output = try geo.bufferWithOptions(a, .{ .rings = &.{&r} }, d, .{});
+        var output = try geo.bufferAll(a, &.{.{ .rings = &.{&r} }}, d, .{});
         defer output.deinit();
         try std.testing.expectApproxEqAbs(expected, area(output.polygons), 0.01);
     }
-    try std.testing.expectError(error.NonFiniteCoordinate, geo.bufferWithOptions(a, .{ .rings = &.{&r} }, std.math.inf(f64), .{}));
-    try std.testing.expectError(error.InvalidOptions, geo.bufferWithOptions(a, .{ .rings = &.{&r} }, 1, .{ .quadrant_segments = 0 }));
+    try std.testing.expectError(error.NonFiniteCoordinate, geo.bufferAll(a, &.{.{ .rings = &.{&r} }}, std.math.inf(f64), .{}));
+    try std.testing.expectError(error.InvalidOptions, geo.bufferAll(a, &.{.{ .rings = &.{&r} }}, 1, .{ .quadrant_segments = 0 }));
 }
 
 fn allocationScenario(alloc: std.mem.Allocator) !void {
@@ -145,7 +145,7 @@ fn allocationScenario(alloc: std.mem.Allocator) !void {
     defer input.deinit();
     var united = try geo.unionAll(alloc, input.polygons, .{});
     defer united.deinit();
-    var buffered = try geo.bufferWithOptions(alloc, input.polygons[0], 1, .{});
+    var buffered = try geo.bufferAll(alloc, &.{input.polygons[0]}, 1, .{});
     defer buffered.deinit();
 }
 test "all Zig allocation failure paths release memory" {
@@ -292,9 +292,9 @@ test "near-straight joints do not defeat noding at any distance" {
     };
     const reference = @abs(area(&.{.{ .rings = &.{&parcel} }}));
     for ([_]f64{ 1, 2, 5, 8, 9, 10, 11, 20 }) |distance| {
-        var grown = try geo.bufferWithOptions(a, .{ .rings = &.{&parcel} }, distance, .{});
+        var grown = try geo.bufferAll(a, &.{.{ .rings = &.{&parcel} }}, distance, .{});
         defer grown.deinit();
-        var shrunk = try geo.bufferWithOptions(a, .{ .rings = &.{&parcel} }, -distance, .{});
+        var shrunk = try geo.bufferAll(a, &.{.{ .rings = &.{&parcel} }}, -distance, .{});
         defer shrunk.deinit();
         try std.testing.expectEqual(@as(usize, 1), grown.polygons.len);
         // Growing and shrinking bracket the original area, monotonically.
@@ -313,7 +313,7 @@ test "a needle triangle buffers to the same region as its long axis" {
         .{ .x = 330.40332934209022, .y = -774.6946854317498 },
         .{ .x = 300.5074814349739, .y = -774.57112440553669 },
     };
-    var output = try geo.bufferWithOptions(a, .{ .rings = &.{&needle} }, 2, .{});
+    var output = try geo.bufferAll(a, &.{.{ .rings = &.{&needle} }}, 2, .{});
     defer output.deinit();
     try std.testing.expectEqual(@as(usize, 1), output.polygons.len);
     // A 29.9 m axis swept by a 2 m disc: two flanks plus two end caps.
@@ -406,7 +406,7 @@ test "buffer accepts empty polygons and lines with repeated coordinates" {
     // were de-duplicated by `normalize`; lines reached `offsetOf` with a
     // zero-length segment and came back `error.PrecisionLoss`.
     const clean = [_]geo.Coordinate{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 1 } };
-    var reference = try geo.bufferInput(a, .{ .line_strings = &.{&clean} }, 1, .{});
+    var reference = try geo.buffer(a, .{ .line_strings = &.{&clean} }, 1, .{});
     defer reference.deinit();
     const expected = area(reference.polygons);
 
@@ -416,7 +416,7 @@ test "buffer accepts empty polygons and lines with repeated coordinates" {
         &.{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 1 }, .{ .x = 2, .y = 1 } },
     };
     for (repeated) |line| {
-        var out = try geo.bufferInput(a, .{ .line_strings = &.{line} }, 1, .{});
+        var out = try geo.buffer(a, .{ .line_strings = &.{line} }, 1, .{});
         defer out.deinit();
         try std.testing.expectApproxEqAbs(expected, area(out.polygons), 1e-9);
     }
@@ -429,14 +429,14 @@ test "a closed line buffers to a band around its ring, either winding" {
     const clockwise = [_]geo.Coordinate{ .{ .x = 1, .y = 9 }, .{ .x = 9, .y = 9 }, .{ .x = 9, .y = 1 }, .{ .x = 1, .y = 1 }, .{ .x = 1, .y = 9 } };
     const counter = [_]geo.Coordinate{ .{ .x = 1, .y = 9 }, .{ .x = 1, .y = 1 }, .{ .x = 9, .y = 1 }, .{ .x = 9, .y = 9 }, .{ .x = 1, .y = 9 } };
     for ([_][]const geo.Coordinate{ &clockwise, &counter }) |line| {
-        var thin = try geo.bufferInput(a, .{ .line_strings = &.{line} }, 1, .{ .quadrant_segments = 8 });
+        var thin = try geo.buffer(a, .{ .line_strings = &.{line} }, 1, .{ .quadrant_segments = 8 });
         defer thin.deinit();
         try std.testing.expectEqual(@as(usize, 1), thin.polygons.len);
         // Shell plus the hole the middle still leaves.
         try std.testing.expectEqual(@as(usize, 2), thin.polygons[0].rings.len);
         try std.testing.expectApproxEqAbs(@as(f64, 63.1214), area(thin.polygons), 1e-3);
 
-        var wide = try geo.bufferInput(a, .{ .line_strings = &.{line} }, 10, .{ .quadrant_segments = 8 });
+        var wide = try geo.buffer(a, .{ .line_strings = &.{line} }, 10, .{ .quadrant_segments = 8 });
         defer wide.deinit();
         try std.testing.expectEqual(@as(usize, 1), wide.polygons.len);
         // Wide enough to close the middle, so the hole is gone.
@@ -444,7 +444,7 @@ test "a closed line buffers to a band around its ring, either winding" {
         try std.testing.expectApproxEqAbs(@as(f64, 696.1445), area(wide.polygons), 1e-3);
 
         // A line encloses no area, so there is nothing to erode.
-        var eroded = try geo.bufferInput(a, .{ .line_strings = &.{line} }, -1, .{});
+        var eroded = try geo.buffer(a, .{ .line_strings = &.{line} }, -1, .{});
         defer eroded.deinit();
         try std.testing.expectEqual(@as(usize, 0), eroded.polygons.len);
     }
@@ -453,21 +453,21 @@ test "a closed line buffers to a band around its ring, either winding" {
 test "buffering a point is a disc and buffering a line is a stadium" {
     const radius = 10.0;
     const disc = std.math.pi * radius * radius;
-    var dot = try geo.bufferInput(a, .{ .points = &.{.{ .x = 7, .y = -3 }} }, radius, .{});
+    var dot = try geo.buffer(a, .{ .points = &.{.{ .x = 7, .y = -3 }} }, radius, .{});
     defer dot.deinit();
     try std.testing.expectEqual(@as(usize, 1), dot.polygons.len);
     // A 64-gon inscribed in the circle, so a little under the true area.
     try std.testing.expectApproxEqAbs(disc, @abs(area(dot.polygons)), disc * 0.01);
 
     const chain = [_]geo.Coordinate{ .{ .x = 0, .y = 0 }, .{ .x = 100, .y = 0 } };
-    var stadium = try geo.bufferInput(a, .{ .line_strings = &.{&chain} }, radius, .{});
+    var stadium = try geo.buffer(a, .{ .line_strings = &.{&chain} }, radius, .{});
     defer stadium.deinit();
     try std.testing.expectEqual(@as(usize, 1), stadium.polygons.len);
     const expected = 2 * radius * 100 + disc;
     try std.testing.expectApproxEqAbs(expected, @abs(area(stadium.polygons)), expected * 0.01);
 
     // Nothing zero-dimensional or one-dimensional survives an erosion.
-    var eroded = try geo.bufferInput(a, .{
+    var eroded = try geo.buffer(a, .{
         .points = &.{.{ .x = 7, .y = -3 }},
         .line_strings = &.{&chain},
     }, -radius, .{});
@@ -476,7 +476,7 @@ test "buffering a point is a disc and buffering a line is a stadium" {
 
     // A point inside a polygon's own buffer adds nothing; one outside does.
     const square = rect(0, 0, 4, 4);
-    var mixed = try geo.bufferInput(a, .{
+    var mixed = try geo.buffer(a, .{
         .polygons = &.{.{ .rings = &.{&square} }},
         .points = &.{.{ .x = 2, .y = 2 }},
     }, 1, .{});
@@ -518,7 +518,7 @@ test "flat blocks carry polygons, line strings and points without copying coordi
     // Borrowed, not copied: the ring points into the block itself.
     try std.testing.expectEqual(@intFromPtr(bytes.ptr) + 3 * 16, @intFromPtr(input.polygons[0].rings[0].ptr));
 
-    var out = try geo.bufferInput(a, input, 0, .{});
+    var out = try geo.buffer(a, input, 0, .{});
     defer out.deinit();
     const written = try geo.flat.output(a, out.polygons);
     defer a.free(written.bytes);
@@ -646,7 +646,7 @@ test "a self-crossing closed line buffers once the arrangement is noded again" {
         .{ .x = 0, .y = 2 }, .{ .x = 0, .y = 0 },
     };
     var lines = [_]geo.LineString{&eight};
-    var out = try geo.bufferInput(a, .{ .line_strings = &lines }, 0.25, .{});
+    var out = try geo.buffer(a, .{ .line_strings = &lines }, 0.25, .{});
     defer out.deinit();
     try std.testing.expectEqual(@as(usize, 1), out.polygons.len);
     try std.testing.expectEqual(@as(usize, 3), out.polygons[0].rings.len);

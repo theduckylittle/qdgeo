@@ -97,7 +97,7 @@ Harness setup (venv, `npm ci`, `cargo build --release`) is in
 | `src/predicates.zig` | Adaptive `orient` / `areaSign`, f128 `area`, segment `intersection` |
 | `src/sweep.zig` | The overlay engine: degenerate-tolerant Martinez-Rueda |
 | `src/operations.zig` | `unionAll`, `buffer*`; input normalization, band generation |
-| `src/abi.zig` | The flat ABI — the whole browser surface, and the wasm root |
+| `src/abi.zig` | The host ABI — the whole browser surface, and the wasm root |
 | `src/abi_wkb.zig` | The WKB ABI, linked into the native library only |
 | `src/native.zig` | Root of the native library: both halves |
 | `src/tests.zig` | All native tests |
@@ -285,7 +285,7 @@ a real answer for time on calls that return an error either way.
 ## Buffer
 
 `src/offset.zig` emits **one raw, self-intersecting offset curve** per ring, per
-line and per point — the JTS/GEOS construction, ported. `bufferInput` emits a
+line and per point — the JTS/GEOS construction, ported. `buffer` emits a
 curve for each ring, line and point and runs one overlay pass.
 
 A **single** polygon is not unioned first. JTS and GEOS build curves straight
@@ -364,16 +364,16 @@ Three things there are load-bearing and easy to break:
   coordinates union to 3,080 — so conversion at the edge costs under a
   millisecond and belongs to whoever knows the target's types.
 - **The browser is 90% of the target and size-sensitive.** `abi.zig` is the whole
-  browser surface: eight exports, no WKB. Anything added there is paid for by
+  browser surface: seven exports, no WKB. Anything added there is paid for by
   every page. `abi_wkb.zig` links only into the native library, which is what a
   Python module would use.
-- **Buffer composes onto the boolean operations.** `geom_flat_execute` applies a
+- **Buffer composes onto the boolean operations.** `geom_apply` applies a
   nonzero `distance` to the *result* of ops 0-3, not just to op 4. It is done
   inside `abi.zig` rather than by the host calling twice, so the intermediate
   geometry never crosses the boundary. The Zig API composes the same thing by
   hand — `boolean(...)` then `bufferAll(result.polygons, ...)` — and does not
   need an option for it.
-- **New operations cost a `Mode` value, not an export.** `geom_flat_execute`
+- **New operations cost a `Mode` value, not an export.** `geom_apply`
   takes an op code and an operand split; `geometry.Mode.covers` is the entire
   difference between union, intersection, difference and symmetric difference,
   because the overlay already carries a winding counter per operand.
@@ -411,21 +411,35 @@ Three things there are load-bearing and easy to break:
 
 ## Host ABI
 
-Single-threaded and non-reentrant. **Seven exports in the WASM build**, all of
-them flat: `geom_flat_input`, `geom_flat_execute`, the four
-`geom_flat_result_*` accessors, and `geom_clear`. That is the entire browser
-surface; `tests/wasm.mjs` asserts the import list is empty.
+Single-threaded and non-reentrant. **Seven exports in the WASM build**:
+`geom_input`, `geom_apply`, the four `geom_result_*` accessors, and
+`geom_clear`. That is the entire browser surface; `tests/wasm.mjs` asserts the
+import list is empty.
 
-The native library adds five more for WKB: `geom_union`, `geom_buffer`,
-`geom_buffer_with_options`, `geom_result_ptr` and `geom_result_len`. Twelve
-total.
+The native library adds four for WKB: `geom_wkb_union`, `geom_wkb_buffer`,
+`geom_wkb_result_ptr` and `geom_wkb_result_len`. Eleven total.
+
+**Nothing in the primary surface says "flat".** There is one input shape, so the
+word distinguished nothing; the names that carry a qualifier are the WKB ones,
+because those are the conversion path rather than the way the library is meant
+to be called. Renaming them back would re-introduce a collision — `abi.zig` and
+`abi_wkb.zig` both link into the native library, and both wanted
+`geom_result_ptr`.
+
+**`js/qdgeo.js` is the binding, and it is part of the library, not the
+examples.** It is copied into `examples/lib/` for the example doc root and
+gitignored there. Its named methods — `union`, `intersection`, `difference`,
+`symmetricDifference`, `buffer` — are what a caller should reach for; `apply` is
+the generic escape hatch. The binary methods take two operand lists and compute
+`subject` themselves, so the split never reaches a caller. `OP` and `STATUS` are
+exported from it, not redefined per example.
 
 **There is no allocate/free pair, and adding one back would be a mistake.**
 Input bytes are borrowed for the duration of the call, so a native caller passes
 whatever memory it already has. Output is library-owned and borrowed through
 `geom_result_ptr` / `geom_result_len` until the next call or `geom_clear`. A
 host-facing allocator only makes sense for WASM, which cannot reach into linear
-memory, and `geom_flat_input` already serves that.
+memory, and `geom_input` already serves that.
 `src/flat.zig` documents the block. It is **1.03x to 1.05x** faster end to end,
 not more: serialisation is only 2–6% of a call, and the reason to prefer it is
 the codec it deletes from the host, not the milliseconds.
