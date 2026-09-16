@@ -1335,12 +1335,15 @@ Verified on master: 29 unit tests in both modes, all build targets,
 failures — the same baselines as 0.16. The WASM artifact is 136,001 bytes
 against 134,935, so +1,066.
 
-CI gained a `Zig master (informational)` job, `continue-on-error`, to report
-upstream drift on every PR rather than have it found during an upgrade.
+A `continue-on-error` CI job against master was added and then **removed**: CI
+tracks stable releases only. A check whose red cross means "upstream changed"
+rather than "this branch is wrong" trains people to ignore the column, and
+master breaks things deliberately. Run it by hand instead.
 
 - [ ] **Re-check when 0.17 actually ships.** Master moves daily and this was one
-      commit's worth of evidence; the release will have accumulated more. The
-      nightly job is the tripwire, not a guarantee.
+      commit's worth of evidence; the release will have accumulated more.
+      Nothing watches this automatically, by choice — it is a release-time
+      check, not a per-PR one.
 - [ ] **Decide whether to raise `minimum_zig_version`** once 0.17 is stable. It
       stays at 0.16.0 while 0.16 is supported, and nothing currently needs a
       0.17 feature.

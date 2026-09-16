@@ -534,11 +534,6 @@ ReleaseSafe, all four build targets, the WASM runtime checks, Prettier, `zig fmt
 and the JTS Topology Suite. It prints the artifact size to the run summary, so a
 change that inflates the download is visible in the pull request.
 
-It also builds against **Zig master** in a separate `continue-on-error` job.
-There is no stable 0.17 yet, and that job is a tripwire for upstream breaking
-changes rather than a gate: a red cross there means Zig moved, not that the
-branch is wrong.
-
 The JTS step is gated with `--expect 155` rather than `--strict`. The six
 failures are the [invalid input](#invalid-input) policy, so `--strict` would
 always trip; a drop below the baseline is a regression, and raising the baseline
