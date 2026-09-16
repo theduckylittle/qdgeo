@@ -9,10 +9,17 @@ boolean operations, so "subtract this, then grow the result by 5 m" is one call.
 That is very nearly all the geometry a web mapping application asks for. The WASM artifact is **135 KB raw, 50.8 KB gzipped**,
 declares no imports, and has no C or C++ dependency.
 
-> **Still experimental.** The test suites are green — 26 of 26 differential
-> workloads, and 155 of 161 applicable JTS assertions — but the resource
-> envelope is not yet bounded or documented. [TODO.md](TODO.md) lists what is
-> left before this warning comes off.
+> **Status.** The suites are green: 26 of 26 differential workloads, 155 of 161
+> applicable JTS assertions, and 0 failures across 57,990 buffers of adjacent
+> parcel clusters. The memory envelope is
+> [measured and published](#memory-and-what-size-input-this-is-good-for), and
+> running out of heap is recoverable rather than fatal.
+>
+> One known limitation, and it is deliberate:
+> [valid input can occasionally fail](#when-valid-input-fails) — 4 of 3,946
+> cluster unions — because qdgeo declines to snap coordinates to make an
+> arrangement representable. It returns an error there; it never returns
+> geometry it could not verify. [TODO.md](TODO.md) tracks what is left.
 
 ## At a glance
 
@@ -313,6 +320,48 @@ library has already declined.
 If you need an answer for every input more than you need an exact one, GEOS and
 JTS snap-round and will return something here.
 
+## Memory, and what size input this is good for
+
+The browser is the target, so the ceiling is the WASM heap: **512 MiB**, set in
+`build.zig`. Peak use, measured through the flat ABI by reading
+`memory.buffer.byteLength` after each call:
+
+| workload | input coordinates | peak heap | KiB per coordinate |
+| --- | ---: | ---: | ---: |
+| union, 10 parcels | 80 | 1.5 MiB | 19.2 |
+| union, 100 parcels | 936 | 2.8 MiB | 3.08 |
+| union, 1,000 parcels | 17,231 | 11.6 MiB | 0.69 |
+| union, 4,040 parcels | 135,080 | 81.8 MiB | 0.62 |
+| buffer, 19,208-coordinate parcel | 19,208 | 23.7 MiB | 1.26 |
+
+Fixed overhead dominates below about a thousand coordinates. Past that the
+marginal cost settles near **0.62 KiB per coordinate for a union and 1.3 for a
+buffer**, which puts the 512 MiB cap somewhere above 700,000 coordinates for a
+union and 350,000 for a buffer. Those two figures are extrapolated from the
+measured range, not measured themselves — treat them as the order of magnitude,
+not a contract.
+
+Two things that are measured rather than extrapolated:
+
+- **Memory is reused between calls.** Eight repeats of the same workload hold
+  flat at the same peak, so the high-water mark is one call's working set and
+  not a running total. A long-lived page does not creep.
+- **Running out is recoverable.** An allocation the heap cannot satisfy returns
+  status `1`, not a trap, and the next call works normally.
+  `tests/wasm.mjs` asserts both.
+
+The one case that costs noticeably more is an input that fails and gets retried:
+the fallback described in [When valid input fails](#when-valid-input-fails) runs
+the overlay again over a larger, fully-noded path set, at roughly **1.8x** the
+peak of a call that succeeds first time.
+
+If your input is larger than this, fold it in batches — `unionAll` is n-ary and
+associative, so unioning in groups and then unioning the groups gives the same
+answer. Folding the 4,040 parcels in batches of 500 or 1,000 returns geometry
+identical to the one-shot union. Keep the batches large: at 250 the extra
+overlay calls hit the failure mode above four times, where the one-shot union
+and the larger batches hit it zero times.
+
 ## The JTS test suite
 
 JTS is the reference implementation for this kind of geometry, and GEOS is a
@@ -485,6 +534,11 @@ ReleaseSafe, all four build targets, the WASM runtime checks, Prettier, `zig fmt
 and the JTS Topology Suite. It prints the artifact size to the run summary, so a
 change that inflates the download is visible in the pull request.
 
+It also builds against **Zig master** in a separate `continue-on-error` job.
+There is no stable 0.17 yet, and that job is a tripwire for upstream breaking
+changes rather than a gate: a red cross there means Zig moved, not that the
+branch is wrong.
+
 The JTS step is gated with `--expect 155` rather than `--strict`. The six
 failures are the [invalid input](#invalid-input) policy, so `--strict` would
 always trip; a drop below the baseline is a regression, and raising the baseline
@@ -497,6 +551,12 @@ Enable it once under **Settings → Pages → Source → GitHub Actions**.
 The differential comparison suite is not in CI. It needs a Rust toolchain, GEOS,
 the parcel dataset and several npm engines, and it measures timings, which a
 shared runner cannot do meaningfully. Run it locally with `npm run compare`.
+
+Neither are the parcel cluster corpora, for the same reason — they need the
+dataset. They are the layer that has caught every overlay defect this engine has
+had, so run them before publishing a correctness claim. Both are scripted under
+[`.claude/skills/`](.claude/skills/): `correctness` for the full sweep,
+`compare` for the published tables.
 
 ## License
 

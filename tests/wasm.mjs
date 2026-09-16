@@ -156,4 +156,45 @@ for (const counts of [
 // And the module is still usable afterwards.
 assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 0))), 7);
 w.geom_clear();
+
+// An allocation the 512 MiB heap cannot satisfy has to come back as a status
+// code, not a trap, and the module has to keep working afterwards. Both are
+// claims the ABI makes; neither was exercised until now.
+//
+// A ring of 999,999 points is just inside `max_segments` and buffering it asks
+// for far more than the cap allows, so the request is refused outright rather
+// than the heap filling gradually — which makes this fast and deterministic.
+// 400,000 points fits today at 493 MiB, so do not lower the size to speed it
+// up. If this ever returns 0, the overlay got cheaper: raise the size rather
+// than deleting the test, because the property being checked is that a refused
+// allocation is *recoverable*, not that this input is too big.
+{
+  const n = 999999;
+  const ring = new Float64Array(2 * n);
+  for (let i = 0; i < n; i++) {
+    const a = (2 * Math.PI * i) / n;
+    ring[2 * i] = Math.cos(a) * 1e6;
+    ring[2 * i + 1] = Math.sin(a) * 1e6;
+  }
+  ring[2 * (n - 1)] = ring[0];
+  ring[2 * (n - 1) + 1] = ring[1];
+  const ptr = w.geom_flat_input(n, 1, 1, 0, 0);
+  assert.notEqual(ptr, 0, 'the input block itself should still be accepted');
+  new Float64Array(w.memory.buffer, ptr, 2 * n).set(ring);
+  new Uint32Array(w.memory.buffer, ptr + 16 * n, 2).set([n, 1]);
+
+  let status;
+  try {
+    status = w.geom_flat_execute(OP.buffer, 1, 5000, 16);
+  } catch (error) {
+    assert.fail(`exhaustion trapped instead of returning a status: ${error.message}`);
+  }
+  assert.equal(status, 1, `expected the allocation-failure status, got ${status}`);
+  w.geom_clear();
+
+  // The whole point of status 1: the next call still works.
+  assert.equal(area(flat(pair, () => w.geom_flat_execute(OP.union, 1, 0, 0))), 7);
+  w.geom_clear();
+}
+
 console.log('WASM runtime checks passed (flat ABI, four boolean ops, no imports)');
