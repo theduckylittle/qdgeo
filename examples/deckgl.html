@@ -1,0 +1,80 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Dan "Ducky" Little -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>deck.gl example</title>
+<link rel="stylesheet" href="./lib/examples.css" />
+<style>
+  select,
+  input[type='range'] {
+    font: inherit;
+    vertical-align: middle;
+  }
+  select {
+    padding: 4px 6px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--ink);
+  }
+  #map {
+    position: relative;
+    height: 520px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--panel);
+  }
+  .controls {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 12px 0;
+  }
+</style>
+
+<div class="wrap">
+  <h1>deck.gl</h1>
+  <p class="lede">
+    The result crosses into deck.gl as <b>binary</b>. qdgeo returns one coordinate array plus ring
+    and polygon ends; deck.gl's <code>SolidPolygonLayer</code> wants flat positions plus
+    <code>startIndices</code> and <code>vertexValid</code>. Going from one to the other loops over
+    rings and polygons, never over coordinates, so no coordinate is read or written in JavaScript on
+    the way out.
+  </p>
+
+  <div class="controls">
+    <label
+      >Operation
+      <select id="op">
+        <option value="union">union</option>
+        <option value="intersection">intersection</option>
+        <option value="difference">difference</option>
+        <option value="symmetricDifference">symmetric difference</option>
+        <option value="buffer">buffer</option>
+      </select>
+    </label>
+    <label
+      >Shapes
+      <select id="preset">
+        <option value="star">star and hexagon</option>
+        <option value="gears">two dodecagons</option>
+        <option value="blocks">two squares</option>
+      </select>
+    </label>
+    <label
+      >Distance
+      <input id="distance" type="range" min="-40" max="40" value="0" step="1" />
+      <span id="distance-out" class="muted">0 units</span>
+    </label>
+  </div>
+
+  <div id="map"></div>
+  <p id="out" class="muted"></p>
+
+  <p class="muted">See <code>src/deck-binary.js</code> for the conversion, which is 30 lines.</p>
+  <p><a href="./index.html">← all examples</a></p>
+</div>
+
+<script type="module" src="./src/deckgl.js"></script>

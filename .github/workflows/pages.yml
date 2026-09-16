@@ -31,27 +31,26 @@ jobs:
       - name: Build the WASM module
         run: zig build wasm
 
-      - name: Assemble the site
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the site
         run: |
-          # The examples fetch ./vendor/qdgeo.wasm, so the freshly built module
-          # replaces whatever is committed. The site is the examples directory.
-          mkdir -p site
-          cp -r examples/. site/
-          cp zig-out/bin/qdgeo.wasm site/vendor/qdgeo.wasm
-          # The binding is the library's, kept in js/ and copied in here.
-          cp js/qdgeo.js site/lib/qdgeo.js
-          # README.md is for the repository, not the published site.
-          rm -f site/README.md site/vendor/README.md
-          ls -R site
+          # The demos import `qdgeo` by name and fetch ./qdgeo.wasm, so the
+          # freshly built module goes into Vite's public directory first.
+          mkdir -p examples/public
+          cp zig-out/bin/qdgeo.wasm examples/public/qdgeo.wasm
+          npm --prefix examples ci
+          npm --prefix examples run build
+          mv examples/dist site
 
       - name: Check the pages the site will serve
         run: |
-          for page in index canvas openlayers maplibre; do
+          for page in index canvas openlayers maplibre deckgl; do
             test -s "site/$page.html" || { echo "missing site/$page.html"; exit 1; }
           done
-          test -s site/vendor/qdgeo.wasm
-          test -s site/lib/qdgeo.js
-          test -s site/lib/examples.css
+          test -s site/qdgeo.wasm
           echo "site is complete"
 
       - uses: actions/configure-pages@v5

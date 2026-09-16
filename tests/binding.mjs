@@ -14,7 +14,7 @@ globalThis.fetch = async (url) => ({
   status: 200,
   arrayBuffer: async () => readFileSync(url).buffer,
 });
-const { load, OP, STATUS, close, regular, star } = await import('../js/qdgeo.js');
+const { load, OP, STATUS, close, Result } = await import('../js/qdgeo.js');
 const geo = await load('zig-out/bin/qdgeo.wasm');
 
 const square = (x, y, w) => [
@@ -26,8 +26,8 @@ const square = (x, y, w) => [
     [x, y],
   ],
 ];
-const area = (shapes) =>
-  shapes.reduce(
+const area = (result) =>
+  result.toArrays().reduce(
     (total, shape) =>
       total +
       shape.reduce((sum, ring) => {
@@ -77,7 +77,6 @@ assert.ok(
   ) > 1000,
 );
 assert.ok(area(geo.buffer([a], -2)) < 100);
-assert.deepEqual(geo.buffer([a], -50), []);
 
 // The generic form and the named one are the same call.
 near(area(geo.apply(OP.union, [a, b])), area(geo.union([a, b])));
@@ -87,7 +86,8 @@ near(area(geo.apply(OP.difference, [a], [b])), area(geo.difference([a], [b])));
 assert.throws(() => geo.buffer([a], 1, { steps: 0 }), /invalid options/);
 assert.equal(STATUS[6], 'invalid options');
 
-// The geometry helpers the examples lean on.
+// `close` meets the API's contract that every ring is closed. The shape
+// generators the demos use are not the library's job and live in examples/.
 assert.deepEqual(
   close([
     [0, 0],
@@ -96,8 +96,35 @@ assert.deepEqual(
   ]).at(-1),
   [0, 0],
 );
-assert.equal(regular(0, 0, 1, 6).length, 7);
-assert.equal(star(0, 0, 2, 1).length, 11);
+
+// The result is the layout the library produced, not a nested rebuild of it.
+const out = geo.union([a, b]);
+assert.ok(out instanceof Result);
+assert.ok(out.coordinates instanceof Float64Array);
+assert.ok(out.ringEnds instanceof Uint32Array);
+assert.equal(out.length, 1);
+assert.equal(out.ringEnds.length, 1);
+assert.equal(out.coordinates.length, 2 * out.ringEnds[0]);
+assert.deepEqual(out.ring(0), [0, out.ringEnds[0]]);
+
+// It survives the next call, because it owns its arrays rather than viewing
+// the module's block.
+const before = out.coordinates.slice();
+geo.buffer([a], 3);
+assert.deepEqual(out.coordinates, before);
+
+// A shape may arrive flat, which is what OpenLayers and deck.gl already hold.
+// Same answer, and no exploding coordinates into pairs first.
+const flatA = { coordinates: [0, 0, 10, 0, 10, 10, 0, 10, 0, 0], ringEnds: [5] };
+const flatB = { coordinates: [5, 5, 15, 5, 15, 15, 5, 15, 5, 5], ringEnds: [5] };
+near(area(geo.union([flatA, flatB])), 175);
+near(area(geo.difference([flatA], [flatB])), 75);
+near(area(geo.union([flatA, b])), 175); // the two forms mix freely
+
+// A result that collapses to nothing is still a Result.
+const empty = geo.buffer([a], -50);
+assert.equal(empty.length, 0);
+assert.deepEqual(empty.toArrays(), []);
 
 geo.clear();
-console.log('JS binding checks passed (five operations, both operand forms)');
+console.log('JS binding checks passed (five operations, flat and nested input)');

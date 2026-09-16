@@ -11,6 +11,9 @@
   "scripts": {
     "test:wasm": "node tests/wasm.mjs",
     "test:binding": "node tests/binding.mjs",
+    "test:deck": "node tests/deck-binary.mjs",
+    "examples": "npm --prefix examples run dev",
+    "examples:build": "npm --prefix examples run build",
     "compare": ".venv/bin/python tests/compare/run.py",
     "format": "prettier --write \"**/*.{js,mjs,html}\"",
     "format:check": "prettier --check \"**/*.{js,mjs,html}\"",

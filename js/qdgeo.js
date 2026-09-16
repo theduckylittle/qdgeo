@@ -41,6 +41,54 @@ export async function load(url = '../vendor/qdgeo.wasm') {
 // full object when they have lines or points to buffer as well.
 const asInput = (shapes) => (Array.isArray(shapes) ? { polygons: shapes } : shapes);
 
+/**
+ * A result, in the layout the library actually produced.
+ *
+ * `coordinates` is every x and y in one array, and the two index arrays cut it
+ * into rings and the rings into polygons — the same shape OpenLayers keeps and
+ * deck.gl wants. They are owned copies, so a result stays valid after the next
+ * call, and copying them is one `memcpy` rather than a few million small array
+ * allocations.
+ *
+ * `toArrays()` builds the nested form on demand, for a host that wants it.
+ */
+export class Result {
+  constructor(coordinates, ringEnds, polygonEnds) {
+    this.coordinates = coordinates;
+    this.ringEnds = ringEnds;
+    this.polygonEnds = polygonEnds;
+  }
+
+  /** How many polygons. */
+  get length() {
+    return this.polygonEnds.length;
+  }
+
+  /** `[[[x, y], ...], ...]` per polygon, shell first and holes after. */
+  toArrays() {
+    const out = [];
+    let ring = 0;
+    let point = 0;
+    for (let s = 0; s < this.polygonEnds.length; s++) {
+      const polygon = [];
+      for (; ring < this.polygonEnds[s]; ring++) {
+        const coords = [];
+        for (; point < this.ringEnds[ring]; point++) {
+          coords.push([this.coordinates[2 * point], this.coordinates[2 * point + 1]]);
+        }
+        polygon.push(coords);
+      }
+      out.push(polygon);
+    }
+    return out;
+  }
+
+  /** Ring start and end, in coordinates, for ring `i`. */
+  ring(i) {
+    return [i === 0 ? 0 : this.ringEnds[i - 1], this.ringEnds[i]];
+  }
+}
+
 class Geometry {
   constructor(exports) {
     this.w = exports;
@@ -87,7 +135,8 @@ class Geometry {
    * @param options.distance buffer distance, which applies to every operation:
    *   on a boolean a nonzero distance buffers the result.
    * @param options.steps segments per quarter circle on a rounded corner.
-   * @returns a list of shapes, in the same nested form.
+   * @returns a `Result`: flat coordinates plus ring and polygon ends, with
+   *   `toArrays()` for the nested form.
    */
   apply(op, a, b = [], { distance = 0, steps = 16 } = {}) {
     const { w } = this;
@@ -112,9 +161,18 @@ class Geometry {
     const ringEnds = [];
     const polygonEnds = [];
     for (const polygon of polygons) {
-      for (const ring of polygon) {
-        for (const [x, y] of ring) coordinates.push(x, y);
-        ringEnds.push(coordinates.length / 2);
+      // A shape is either rings of [x, y] pairs, or the flat form a host like
+      // OpenLayers already holds. Taking both means such a host never has to
+      // explode its coordinates into pairs just to have them flattened again.
+      if (Array.isArray(polygon)) {
+        for (const ring of polygon) {
+          for (const [x, y] of ring) coordinates.push(x, y);
+          ringEnds.push(coordinates.length / 2);
+        }
+      } else {
+        const base = coordinates.length / 2;
+        for (const value of polygon.coordinates) coordinates.push(value);
+        for (const end of polygon.ringEnds) ringEnds.push(base + end);
       }
       polygonEnds.push(ringEnds.length);
     }
@@ -154,25 +212,17 @@ class Geometry {
     const total = w.geom_result_coordinates();
     const rings = w.geom_result_rings();
     const shapes = w.geom_result_polygons();
-    if (!total) return [];
+    if (!total) return new Result(new Float64Array(0), new Uint32Array(0), new Uint32Array(0));
 
     // Results are always areal, so the block is coordinates, ring ends and
-    // polygon ends and nothing else.
-    const xy = new Float64Array(w.memory.buffer, out, 2 * total);
+    // polygon ends and nothing else. Three slices copy it out; the module is
+    // free to reuse its block on the next call.
     const ends = new Uint32Array(w.memory.buffer, out + 16 * total, rings + shapes);
-    const polygons = [];
-    let ring = 0;
-    let point = 0;
-    for (let s = 0; s < shapes; s++) {
-      const polygon = [];
-      for (; ring < ends[rings + s]; ring++) {
-        const coords = [];
-        for (; point < ends[ring]; point++) coords.push([xy[2 * point], xy[2 * point + 1]]);
-        polygon.push(coords);
-      }
-      polygons.push(polygon);
-    }
-    return polygons;
+    return new Result(
+      new Float64Array(w.memory.buffer, out, 2 * total).slice(),
+      ends.slice(0, rings),
+      ends.slice(rings),
+    );
   }
 
   /** Release the last result. Each call already clears the one before it. */
@@ -187,24 +237,3 @@ export const close = (ring) => {
   const [lx, ly] = ring[ring.length - 1];
   return fx === lx && fy === ly ? ring : [...ring, [fx, fy]];
 };
-
-/** A regular polygon, handy for example geometry. */
-export function regular(cx, cy, radius, sides, rotation = 0) {
-  const ring = [];
-  for (let i = 0; i < sides; i++) {
-    const angle = rotation + (2 * Math.PI * i) / sides;
-    ring.push([cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)]);
-  }
-  return close(ring);
-}
-
-/** A star, which gives the boolean operations something concave to chew on. */
-export function star(cx, cy, outer, inner, points = 5, rotation = -Math.PI / 2) {
-  const ring = [];
-  for (let i = 0; i < points * 2; i++) {
-    const r = i % 2 ? inner : outer;
-    const angle = rotation + (Math.PI * i) / points;
-    ring.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle)]);
-  }
-  return close(ring);
-}
