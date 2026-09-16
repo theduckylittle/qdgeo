@@ -56,6 +56,9 @@ jobs:
       - name: JavaScript binding
         run: npm run test:binding
 
+      - name: deck.gl binary conversion
+        run: npm run test:deck
+
       - name: Formatting
         run: npm run format:check
 

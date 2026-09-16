@@ -5,15 +5,22 @@ Published from `main` at
 `.github/workflows/pages.yml`, which rebuilds the WASM module first so the live
 site is never running a stale one.
 
-Three standalone pages, each one file plus the shared helper. They all do the
-same four boolean operations and the same buffer, so the interesting part is how
-each host hands geometry over.
+Four pages, built with Vite and importing their dependencies from npm, so they
+look like code someone would actually write. They all do the same four boolean
+operations and the same buffer; the interesting part is what each host wants
+geometry to look like, and how much work that costs.
 
 | Page | Host | What it shows |
 | --- | --- | --- |
-| `canvas.html` | none | The smallest possible integration: two shapes, `<canvas>`, no dependencies at all |
-| `openlayers.html` | OpenLayers 10 | Reading `flatCoordinates` and `getEnds()` straight across, with **no format conversion** |
-| `maplibre.html` | MapLibre GL JS 4 | Converting to GeoJSON on the way out, which is what MapLibre wants |
+| `canvas.html` | none | The smallest integration: two shapes, `<canvas>`, no dependencies |
+| `openlayers.html` | OpenLayers 10 | `flatCoordinates` and `getEnds()` straight across, **both directions**, no coordinate touched |
+| `deckgl.html` | deck.gl 9 | The result as **binary**, straight into `SolidPolygonLayer` |
+| `maplibre.html` | MapLibre GL JS 6 | GeoJSON, which is the one host that genuinely needs the nested form |
+
+That spread is the point. qdgeo returns one coordinate array plus ring and
+polygon ends, and three of these four hosts want something that is a couple of
+index loops away from it. Only MapLibre asks for coordinates in pairs, and only
+that demo calls `toArrays()`.
 
 ## Running them
 
@@ -21,13 +28,16 @@ The pages fetch the WASM module, so they need a server — opening the file
 directly with `file://` will not work.
 
 ```sh
-zig build wasm                       # writes zig-out/bin/qdgeo.wasm
-cp zig-out/bin/qdgeo.wasm examples/vendor/
-cp js/qdgeo.js examples/lib/          # the binding lives in js/, not here
-python3 -m http.server -d examples 8000
+zig build wasm                                  # writes zig-out/bin/qdgeo.wasm
+cp zig-out/bin/qdgeo.wasm examples/public/      # Vite serves public/ at the root
+npm --prefix examples install
+npm --prefix examples run dev
 ```
 
-Then open <http://localhost:8000/canvas.html>.
+Vite prints a URL. From the repository root, `npm run examples` is the same
+thing. The demos import the binding as `qdgeo`, the way a consumer would after
+installing it; `vite.config.js` aliases that name to `../js/qdgeo.js` and is the
+only thing standing in for a published package.
 
 `examples/vendor/qdgeo.wasm` is a copy so the pages work as a self-contained
 directory. Re-copy it after rebuilding.

@@ -89,21 +89,22 @@ the seven exports.
 
 ### Examples
 
-Three standalone pages in [`examples/`](examples/) — plain canvas, OpenLayers,
-and MapLibre GL JS — each running all four boolean operations and the buffer
-with live controls. They are published from `main` at
+Four pages in [`examples/`](examples/) — plain canvas, OpenLayers, deck.gl and
+MapLibre GL JS — each running all four boolean operations and the buffer with
+live controls, and each showing what that host wants geometry to look like.
+They are published from `main` at
 **[theduckylittle.github.io/qdgeo](https://theduckylittle.github.io/qdgeo/)**.
 
 To run them locally:
 
 ```sh
-zig build wasm && cp zig-out/bin/qdgeo.wasm examples/vendor/
-cp js/qdgeo.js examples/lib/
-python3 -m http.server -d examples 8000   # then open http://localhost:8000/
+zig build wasm && cp zig-out/bin/qdgeo.wasm examples/public/
+npm run examples                          # vite, on a URL it prints
 ```
 
-The binding lives in [`js/`](js/) and is copied into the example doc root by the
-command above. See [examples/README.md](examples/README.md).
+They are a Vite project importing their dependencies from npm, including the
+binding as `qdgeo`, so they read like code someone would write rather than like
+a demo harness. See [examples/README.md](examples/README.md).
 
 ### Building everything else
 

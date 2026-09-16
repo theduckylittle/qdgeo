@@ -8,4 +8,7 @@ tests/compare/rust/target/
 tests/compare/data/
 .sizes-*/
 reduced.wkb
-examples/lib/qdgeo.js
+examples/node_modules/
+examples/dist/
+examples/public/qdgeo.wasm
+*.swp
