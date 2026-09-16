@@ -49,10 +49,17 @@ One change was needed, and it is written so both versions accept it:
   var cells: [100]bool = @splat(false);
   ```
 
-Keep new code compiling on both until 0.17 ships. The `Zig master
-(informational)` CI job builds against master on every PR and is
-`continue-on-error`, so a break there reports upstream drift without failing the
-branch. When it goes red, read it before upgrading anything.
+CI builds against the pinned stable release only. Tracking a moving target
+there buys noise rather than signal — master breaks things on purpose, and a red
+cross that means "upstream changed" trains everyone to ignore the column. Check
+master by hand when a release approaches:
+
+```sh
+zig build test && zig build wasm && zig fmt --check build.zig src
+```
+
+Keeping new code compiling on both is still worth doing while it is this cheap;
+`@splat` above was the whole cost so far.
 
 ## Commands
 
