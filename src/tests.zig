@@ -128,12 +128,12 @@ test "union empty, reversed winding, sloped edges and limits" {
 test "rounded rectangle buffer positive, zero, negative and collapse" {
     const r = rect(0, 0, 4, 4);
     for ([_]f64{ 1, 0, -1, -2, -3 }, [_]f64{ 32 + std.math.pi, 16, 4, 0, 0 }) |d, expected| {
-        var output = try geo.bufferAll(a, &.{.{ .rings = &.{&r} }}, d, .{});
+        var output = try geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{&r} }} }, d, .{});
         defer output.deinit();
         try std.testing.expectApproxEqAbs(expected, area(output.polygons), 0.01);
     }
-    try std.testing.expectError(error.NonFiniteCoordinate, geo.bufferAll(a, &.{.{ .rings = &.{&r} }}, std.math.inf(f64), .{}));
-    try std.testing.expectError(error.InvalidOptions, geo.bufferAll(a, &.{.{ .rings = &.{&r} }}, 1, .{ .quadrant_segments = 0 }));
+    try std.testing.expectError(error.NonFiniteCoordinate, geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{&r} }} }, std.math.inf(f64), .{}));
+    try std.testing.expectError(error.InvalidOptions, geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{&r} }} }, 1, .{ .quadrant_segments = 0 }));
 }
 
 fn allocationScenario(alloc: std.mem.Allocator) !void {
@@ -145,7 +145,7 @@ fn allocationScenario(alloc: std.mem.Allocator) !void {
     defer input.deinit();
     var united = try geo.unionAll(alloc, input.polygons, .{});
     defer united.deinit();
-    var buffered = try geo.bufferAll(alloc, &.{input.polygons[0]}, 1, .{});
+    var buffered = try geo.buffer(alloc, .{ .polygons = &.{input.polygons[0]} }, 1, .{});
     defer buffered.deinit();
 }
 test "all Zig allocation failure paths release memory" {
@@ -292,9 +292,9 @@ test "near-straight joints do not defeat noding at any distance" {
     };
     const reference = @abs(area(&.{.{ .rings = &.{&parcel} }}));
     for ([_]f64{ 1, 2, 5, 8, 9, 10, 11, 20 }) |distance| {
-        var grown = try geo.bufferAll(a, &.{.{ .rings = &.{&parcel} }}, distance, .{});
+        var grown = try geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{&parcel} }} }, distance, .{});
         defer grown.deinit();
-        var shrunk = try geo.bufferAll(a, &.{.{ .rings = &.{&parcel} }}, -distance, .{});
+        var shrunk = try geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{&parcel} }} }, -distance, .{});
         defer shrunk.deinit();
         try std.testing.expectEqual(@as(usize, 1), grown.polygons.len);
         // Growing and shrinking bracket the original area, monotonically.
@@ -313,7 +313,7 @@ test "a needle triangle buffers to the same region as its long axis" {
         .{ .x = 330.40332934209022, .y = -774.6946854317498 },
         .{ .x = 300.5074814349739, .y = -774.57112440553669 },
     };
-    var output = try geo.bufferAll(a, &.{.{ .rings = &.{&needle} }}, 2, .{});
+    var output = try geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{&needle} }} }, 2, .{});
     defer output.deinit();
     try std.testing.expectEqual(@as(usize, 1), output.polygons.len);
     // A 29.9 m axis swept by a 2 m disc: two flanks plus two end caps.
@@ -398,7 +398,7 @@ test "WKB parses every 2D OGC type, including nested collections" {
 test "buffer accepts empty polygons and lines with repeated coordinates" {
     // Found by the JTS-shaped review, not by the suite: both are legal input
     // that real WKB contains, and both used to fail.
-    var empty = try geo.bufferAll(a, &.{.{ .rings = &.{} }}, 1, .{});
+    var empty = try geo.buffer(a, .{ .polygons = &.{.{ .rings = &.{} }} }, 1, .{});
     defer empty.deinit();
     try std.testing.expectEqual(@as(usize, 0), empty.polygons.len);
 
@@ -617,7 +617,7 @@ test "buffers the sweep's own labelling cannot close fall back to the graph pass
         .{ .steps = 1, .expected = 16.0 },
         .{ .steps = 16, .expected = 17.704822735818908 },
     }) |case| {
-        var out = try geo.bufferAll(a, &pair, 1.0, .{ .quadrant_segments = case.steps });
+        var out = try geo.buffer(a, .{ .polygons = &pair }, 1.0, .{ .quadrant_segments = case.steps });
         defer out.deinit();
         try std.testing.expectApproxEqAbs(case.expected, area(out.polygons), 1e-9);
     }
@@ -630,7 +630,7 @@ test "buffers the sweep's own labelling cannot close fall back to the graph pass
     };
     var ell_rings = [_]geo.LinearRing{&ell};
     const shape = [_]geo.Polygon{.{ .rings = &ell_rings }};
-    var eroded = try geo.bufferAll(a, &shape, -1.25, .{ .quadrant_segments = 16 });
+    var eroded = try geo.buffer(a, .{ .polygons = &shape }, -1.25, .{ .quadrant_segments = 16 });
     defer eroded.deinit();
     try std.testing.expectEqual(@as(usize, 0), eroded.polygons.len);
 }

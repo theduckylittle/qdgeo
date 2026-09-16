@@ -29,7 +29,18 @@ export fn geom_wkb_result_len() usize {
     return abi.result.len;
 }
 
-fn process(ptr: usize, len: usize, distance: ?f64, steps: u32) !void {
+/// Every operation, the same five the coordinate ABI has, over WKB bytes.
+///
+/// One entry point rather than one per operation: the operation is a value, so
+/// adding one costs nothing here. See `geom_apply` in `abi.zig`, whose argument
+/// list this mirrors after the two that say where the bytes are.
+export fn geom_wkb_apply(op: u32, ptr: usize, len: usize, subject: u32, distance: f64, steps: u32) u32 {
+    abi.releaseResults();
+    process(op, ptr, len, subject, distance, steps) catch |err| return status(err);
+    return 0;
+}
+
+fn process(op: u32, ptr: usize, len: usize, subject: u32, distance: f64, steps: u32) !void {
     // A null pointer with a nonzero length is a caller bug, but it has to come
     // back as a status code like every other malformed input: building the
     // slice anyway kills the host process instead of failing the call.
@@ -37,27 +48,11 @@ fn process(ptr: usize, len: usize, distance: ?f64, steps: u32) !void {
     const bytes: []const u8 = if (len == 0) &.{} else @as([*]const u8, @ptrFromInt(ptr))[0..len];
     var input = try geo.wkb.parse(allocator, bytes, .{});
     defer input.deinit();
-    var output = if (distance) |d|
-        try geo.buffer(allocator, .{
-            .polygons = input.polygons,
-            .line_strings = input.line_strings,
-            .points = input.points,
-        }, d, .{ .quadrant_segments = steps })
-    else
-        try geo.unionAll(allocator, input.polygons, .{});
+    var output = try abi.execute(.{
+        .polygons = input.polygons,
+        .line_strings = input.line_strings,
+        .points = input.points,
+    }, op, subject, distance, steps);
     defer output.deinit();
     abi.result = try geo.wkb.write(allocator, output.polygons, .little);
-}
-export fn geom_wkb_union(ptr: usize, len: usize) u32 {
-    abi.releaseResults();
-    process(ptr, len, null, 16) catch |err| return status(err);
-    return 0;
-}
-/// Buffer with a chosen arc resolution. There is no precision parameter: qdgeo
-/// is floating precision only, and an option that is accepted and then always
-/// rejected is worse than no option at all.
-export fn geom_wkb_buffer(ptr: usize, len: usize, distance: f64, steps: u32) u32 {
-    abi.releaseResults();
-    process(ptr, len, distance, steps) catch |err| return status(err);
-    return 0;
 }

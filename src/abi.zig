@@ -101,17 +101,14 @@ export fn geom_apply(op: u32, subject: u32, distance: f64, steps: u32) u32 {
     return 0;
 }
 
-fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
-    const borrowed = try flat.view(block[0..try flat.size(counts)], counts);
-    var scratch = std.heap.ArenaAllocator.init(allocator);
-    defer scratch.deinit();
-    const input = try flat.input(scratch.allocator(), borrowed);
-    if (op == 4) {
-        var output = try geo.buffer(allocator, input, distance, .{ .quadrant_segments = steps });
-        defer output.deinit();
-        flat_result = try flat.output(allocator, output.polygons);
-        return;
-    }
+/// Every operation, for both ABIs. The two halves differ only in how geometry
+/// arrives and how it leaves; what happens in between is this, once.
+///
+/// `op` is 0 union, 1 intersection, 2 difference, 3 symmetric difference,
+/// 4 buffer. `subject` is how many leading polygons form the first operand.
+pub fn execute(input: geo.BufferInput, op: u32, subject: u32, distance: f64, steps: u32) !geo.Geometry {
+    const style: geo.BufferOptions = .{ .quadrant_segments = steps };
+    if (op == 4) return geo.buffer(allocator, input, distance, style);
 
     const mode: geo.Mode = switch (op) {
         0 => .union_all,
@@ -122,18 +119,22 @@ fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
     };
     const split = @min(subject, input.polygons.len);
     var output = try geo.boolean(allocator, input.polygons[0..split], input.polygons[split..], mode, .{});
-    defer output.deinit();
 
     // A nonzero distance buffers the result of the boolean operation. Doing it
     // here rather than in a second call keeps the intermediate geometry inside
     // the module: a host that wants "difference, then grow by 5 m" pays one
     // crossing instead of two, and never has to copy the intermediate out.
-    if (distance != 0) {
-        var grown = try geo.bufferAll(allocator, output.polygons, distance, .{ .quadrant_segments = steps });
-        defer grown.deinit();
-        flat_result = try flat.output(allocator, grown.polygons);
-        return;
-    }
+    if (distance == 0) return output;
+    defer output.deinit();
+    return geo.buffer(allocator, .{ .polygons = output.polygons }, distance, style);
+}
+
+fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
+    const borrowed = try flat.view(block[0..try flat.size(counts)], counts);
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    var output = try execute(try flat.input(scratch.allocator(), borrowed), op, subject, distance, steps);
+    defer output.deinit();
     flat_result = try flat.output(allocator, output.polygons);
 }
 

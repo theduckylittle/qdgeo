@@ -416,8 +416,12 @@ Single-threaded and non-reentrant. **Seven exports in the WASM build**:
 `geom_clear`. That is the entire browser surface; `tests/wasm.mjs` asserts the
 import list is empty.
 
-The native library adds four for WKB: `geom_wkb_union`, `geom_wkb_buffer`,
-`geom_wkb_result_ptr` and `geom_wkb_result_len`. Eleven total.
+The native library adds three for WKB: `geom_wkb_apply`, `geom_wkb_result_ptr`
+and `geom_wkb_result_len`. **Ten total.**
+
+Both halves dispatch through one `abi.execute`, so the operation switch, the
+operand split and the buffer-composes-onto-a-boolean rule exist once. The two
+ABIs differ only in how geometry arrives and how it leaves.
 
 **Nothing in the primary surface says "flat".** There is one input shape, so the
 word distinguished nothing; the names that carry a qualifier are the WKB ones,

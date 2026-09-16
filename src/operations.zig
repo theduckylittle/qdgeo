@@ -261,9 +261,3 @@ pub fn buffer(a: std.mem.Allocator, input: BufferInput, distance: f64, options: 
     limits.max_segments = limits.max_generated_segments;
     return sweep.execute(a, paths.items, .union_all, limits);
 }
-
-/// Buffer polygons. The common case, and the same thing as calling `buffer`
-/// with only `polygons` set.
-pub fn bufferAll(a: std.mem.Allocator, polygons: []const g.Polygon, distance: f64, options: BufferOptions) !g.Geometry {
-    return buffer(a, .{ .polygons = polygons }, distance, options);
-}
