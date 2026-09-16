@@ -20,6 +20,7 @@ from shapely.geometry import MultiPolygon, shape
 ROOT = Path(__file__).resolve().parents[4]
 LIB = ROOT / 'zig-out' / 'lib' / 'libqdgeo_native.so'
 FIXTURES = ROOT / 'tests' / 'compare' / 'generated' / 'fixtures.json'
+OP_UNION, OP_BUFFER = 0, 4
 BUFFER_BASELINE = 0
 UNION_BASELINE = 4
 
@@ -44,10 +45,10 @@ def main():
 
     parts = parcels()
     lib = C.CDLL(str(LIB))
-    lib.geom_wkb_buffer.argtypes = [C.c_size_t, C.c_size_t, C.c_double, C.c_uint32]
-    lib.geom_wkb_buffer.restype = C.c_uint32
-    lib.geom_wkb_union.argtypes = [C.c_size_t, C.c_size_t]
-    lib.geom_wkb_union.restype = C.c_uint32
+    lib.geom_wkb_apply.argtypes = [
+        C.c_uint32, C.c_size_t, C.c_size_t, C.c_uint32, C.c_double, C.c_uint32
+    ]
+    lib.geom_wkb_apply.restype = C.c_uint32
 
     groups = (2, 4) if args.quick else (2, 4, 8, 16)
     distances, steps = (0.5, 2, 5, -0.5, -2), (1, 4, 16)
@@ -59,7 +60,7 @@ def main():
             for d in distances:
                 for q in steps:
                     n_buf += 1
-                    if lib.geom_wkb_buffer(C.addressof(buf), len(blob), d, q) != 0:
+                    if lib.geom_wkb_apply(OP_BUFFER, C.addressof(buf), len(blob), 1, d, q) != 0:
                         bad_buf.append((k, s, d, q))
     print(f'cluster buffers: {len(bad_buf):5d} of {n_buf} fail   {time.perf_counter() - t0:5.1f}s')
 
@@ -69,7 +70,7 @@ def main():
             blob = MultiPolygon(parts[s:s + k]).wkb
             buf = C.create_string_buffer(blob, len(blob))
             n_uni += 1
-            if lib.geom_wkb_union(C.addressof(buf), len(blob)) != 0:
+            if lib.geom_wkb_apply(OP_UNION, C.addressof(buf), len(blob), 1, 0.0, 16) != 0:
                 bad_uni.append((k, s))
     print(f'cluster unions:  {len(bad_uni):5d} of {n_uni} fail   {time.perf_counter() - t0:5.1f}s')
     if bad_uni:

@@ -16,7 +16,6 @@ pub const Mode = @import("geometry.zig").Mode;
 pub const BufferOptions = @import("operations.zig").BufferOptions;
 pub const BufferInput = @import("operations.zig").BufferInput;
 pub const buffer = @import("operations.zig").buffer;
-pub const bufferAll = @import("operations.zig").bufferAll;
 
 test {
     _ = @import("tests.zig");

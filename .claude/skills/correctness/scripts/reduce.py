@@ -27,10 +27,10 @@ ROOT = Path(__file__).resolve().parents[4]
 
 def engine(path):
     lib = C.CDLL(str(path))
-    lib.geom_wkb_union.argtypes = [C.c_size_t, C.c_size_t]
-    lib.geom_wkb_union.restype = C.c_uint32
-    lib.geom_wkb_buffer.argtypes = [C.c_size_t, C.c_size_t, C.c_double, C.c_uint32]
-    lib.geom_wkb_buffer.restype = C.c_uint32
+    lib.geom_wkb_apply.argtypes = [
+        C.c_uint32, C.c_size_t, C.c_size_t, C.c_uint32, C.c_double, C.c_uint32
+    ]
+    lib.geom_wkb_apply.restype = C.c_uint32
     return lib
 
 
@@ -62,9 +62,8 @@ def main():
     def status(lib, idx):
         blob = MultiPolygon([parts[i] for i in idx]).wkb
         buf = C.create_string_buffer(blob, len(blob))
-        if args.op == 'union':
-            return lib.geom_wkb_union(C.addressof(buf), len(blob))
-        return lib.geom_wkb_buffer(C.addressof(buf), len(blob), args.distance, args.steps)
+        op = 0 if args.op == 'union' else 4
+        return lib.geom_wkb_apply(op, C.addressof(buf), len(blob), 1, args.distance, args.steps)
 
     def interesting(idx):
         if not idx or status(now, idx) == 0:

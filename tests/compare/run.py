@@ -20,6 +20,7 @@ from shapely.geometry import shape, mapping, MultiPolygon, Polygon, Point
 from shapely.strtree import STRtree
 from prepare import prepare, DEFAULT_SOURCE
 
+OP_UNION, OP_BUFFER = 0, 4
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'tests/compare/generated'
 
@@ -35,8 +36,10 @@ def measure(fn, repeats):
 class Native:
     def __init__(self):
         self.lib = C.CDLL(str(ROOT / 'zig-out/lib/libqdgeo_native.so'))
-        self.lib.geom_wkb_union.argtypes = [C.c_void_p, C.c_size_t]
-        self.lib.geom_wkb_buffer.argtypes = [C.c_void_p, C.c_size_t, C.c_double, C.c_uint32]
+        # One entry point, the same five operations the browser has.
+        self.lib.geom_wkb_apply.argtypes = [
+            C.c_uint32, C.c_void_p, C.c_size_t, C.c_uint32, C.c_double, C.c_uint32
+        ]
         self.lib.geom_wkb_result_ptr.restype = C.c_void_p
         self.lib.geom_wkb_result_len.restype = C.c_size_t
     def run(self, blob, c):
@@ -44,9 +47,11 @@ class Native:
         # so Python keeps them. The result is copied before geom_clear releases it.
         try:
             if c['operation'] == 'union':
-                status = self.lib.geom_wkb_union(blob, len(blob))
+                status = self.lib.geom_wkb_apply(OP_UNION, blob, len(blob), 1, 0.0, 16)
             else:
-                status = self.lib.geom_wkb_buffer(blob, len(blob), c['distance'], c['steps'])
+                status = self.lib.geom_wkb_apply(
+                    OP_BUFFER, blob, len(blob), 1, c['distance'], c['steps']
+                )
             if status:
                 raise RuntimeError(f'native status {status}')
             return C.string_at(self.lib.geom_wkb_result_ptr(), self.lib.geom_wkb_result_len())

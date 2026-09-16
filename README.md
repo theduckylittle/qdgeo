@@ -480,16 +480,17 @@ seven exports, no parser, no writer.
 The native library keeps WKB, because that is how qdgeo reaches GeoParquet,
 PostGIS, and the comparison suite. A Python module would link the same path.
 These are conversion conveniences for a host that already holds WKB, which is
-why they are the ones carrying a qualifier:
+why they are the ones carrying a qualifier. The operation is a value here too,
+so both ABIs have the same five:
 
-- `geom_wkb_union(ptr, len) -> status`
-- `geom_wkb_buffer(ptr, len, distance, steps) -> status`
+- `geom_wkb_apply(op, ptr, len, subject, distance, steps) -> status` — the same
+  five operations and the same argument list as `geom_apply`, after the two that
+  say where the bytes are.
 - `geom_wkb_result_ptr()`, `geom_wkb_result_len()`
 
 Input bytes are borrowed for the duration of the call. Results go through
-`geom_clear()` like any other. The four boolean operations are not all here:
-WKB exists to convert, and a host that wants intersection or difference is
-better served by the coordinate block, which has them for free.
+`geom_clear()` like any other. Ten exports in total: seven for the coordinate
+block, three for WKB.
 
 ## Zig API
 
@@ -531,13 +532,13 @@ value. Results never borrow input storage.
   `unionAll(allocator, polygons, BooleanOptions) !Geometry` is the n-ary union
   over one list. Valid input topology is a precondition and is not fully
   validated. Input winding and repeated points are normalised before overlay.
-- `buffer(allocator, BufferInput, distance, BufferOptions) !Geometry` takes
-  polygons, lines, and points together: a point buffers to a disc, a line to a
-  stadium, and neither survives a negative distance. `bufferAll(allocator,
-  polygons, distance, BufferOptions)` is the same call with only polygons, which
-  is the common case. Areal input is unioned first. Holes, splitting, and
-  collapse are all supported. Zero distance runs union and normalisation, not a
-  byte-identical copy.
+- `buffer(allocator, BufferInput, distance, BufferOptions) !Geometry` is the
+  only buffer entry point. It takes polygons, lines, and points together — a
+  point buffers to a disc, a line to a stadium, and neither survives a negative
+  distance — so the common case reads `buffer(a, .{ .polygons = shapes }, 2,
+  .{})`. Areal input is unioned first. Holes, splitting, and collapse are all
+  supported. Zero distance runs union and normalisation, not a byte-identical
+  copy.
 
 Buffer uses the JTS/GEOS construction: one raw, self-intersecting offset curve
 per ring, line, and point, resolved by the overlay's winding depth. See
