@@ -616,10 +616,24 @@ the reason to use it is the code it removes, not the speed.
       `cooredinates`, so every MultiPolygon buffers in UTM zone 31N regardless of
       location. Worth fixing while swapping, not worth reproducing.
 
-## What gates dropping "experimental"
+## What gated dropping "experimental" — resolved 2026-09-15
 
-Grouped by what the label actually promises. Everything here is open; the
-performance items further down are not blockers.
+The label is off. Grouped by what it promised, with what closed each. The
+performance items further down were never blockers.
+
+What is **not** claimed by removing it: that every valid input succeeds. 4 of
+3,946 cluster unions still return `UnnodableCrossing`, and the README says so in
+its own section rather than in a footnote. The label came off because that
+limitation is understood, measured, bounded and documented — not because it went
+away.
+
+Still open, and neither blocks the label:
+
+- **Calibrate the limits.** `max_work`, `max_nodes` and `max_output_points` are
+  round numbers rather than figures derived from the envelope. They are enforced
+  and conservative, so this is precision, not safety.
+- **A distinct ABI status for `UnnodableCrossing`.** It shares `5` with
+  malformed input; the Zig API already distinguishes them.
 
 ### 1. The public API has to stop changing
 
@@ -687,19 +701,21 @@ tells a caller in advance whether their input will take that path.
 - [x] **No leak across calls.** Eight repeats of the same workload hold flat at
       11.6 MiB and 23.7 MiB — freed memory is reused, the high-water mark is one
       call's working set, not a running total.
-- [ ] **Publish the envelope.** The table above is measured; nothing in the
-      README or the ABI docs says any of it, and no limit enforces it.
-      **Deferred by decision (2026-09-15):** a WASM memory ceiling is a
-      well-understood constraint for this audience, and the two allocation fixes
-      above bought enough headroom that this is not what gates the label.
-- [ ] **Test recoverable exhaustion.** `abi.zig` maps `OutOfMemory` to status 1,
-      but nothing exercises it: there is no test that drives the WASM heap to
-      exhaustion, asserts status 1 rather than a trap, and then asserts the
-      library still works for the next call. Until that exists, "recoverable" is
-      an intention.
+- [x] **Published the envelope.** README has "Memory, and what size input this
+      is good for": the measured table, the marginal cost per coordinate, the
+      extrapolated ceiling marked as extrapolated, the 1.8x cost of the retry
+      path, and the batching recipe with its warning that small batches raise
+      the failure rate.
+- [x] **Recoverable exhaustion is now tested.** `tests/wasm.mjs` buffers a
+      999,999-point ring, which asks for far more than the 512 MiB cap allows,
+      and asserts the call returns status 1 rather than trapping and that the
+      next call still works. Sizing matters: from a clean heap 400,000 points
+      *fits*, at 493 MiB, so the test uses a size that is refused outright —
+      fast (100 ms) and deterministic rather than balanced on the edge.
 - [ ] **Calibrate the limits.** `max_work`, `max_nodes` and `max_output_points`
       are round numbers, and exactly one test touches any of them. They should
       be derived from the envelope above and each have a test that trips it.
+      Not a blocker: they are enforced and conservative.
 ### 3. Behaviour on messy input — decided
 
 - [x] **Invalid geometry is rejected, and that is the documented policy.** A
