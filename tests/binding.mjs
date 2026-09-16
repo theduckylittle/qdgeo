@@ -126,5 +126,30 @@ const empty = geo.buffer([a], -50);
 assert.equal(empty.length, 0);
 assert.deepEqual(empty.toArrays(), []);
 
+// A result is a collection of shapes, so it goes straight back in as an
+// operand. This is the whole reason it has the shape it has: what comes out is
+// what goes in, and chaining costs two index loops rather than a rebuild.
+const userShapes = [a, b];
+const grown = geo.buffer(geo.union(userShapes), { distance: 15 });
+assert.ok(area(grown) > 175);
+near(area(geo.buffer(geo.union(userShapes), 15)), area(grown)); // either form
+
+const united = geo.union(userShapes);
+near(area(geo.intersection([square(0, 0, 8)], united)), 64);
+near(area(geo.difference(united, [square(0, 0, 8)])), 111);
+
+// A result on one side and plain shapes on the other.
+near(area(geo.union([united, square(50, 50, 4)])), 175 + 16);
+
+// And a chain several deep.
+const deep = geo.difference(geo.buffer(geo.union(userShapes), 2), geo.union([square(0, 0, 3)]));
+assert.ok(deep.length >= 1);
+
+// Polygon boundaries survive the round trip: two disjoint shapes stay two.
+const disjoint = geo.union([square(0, 0, 5), square(100, 100, 5)]);
+assert.equal(disjoint.length, 2);
+assert.equal(geo.union(disjoint).length, 2);
+near(area(geo.union(disjoint)), 50);
+
 geo.clear();
-console.log('JS binding checks passed (five operations, flat and nested input)');
+console.log('JS binding checks passed (five operations, flat and nested input, chaining)');

@@ -37,9 +37,27 @@ export async function load(url = '../vendor/qdgeo.wasm') {
   return new Geometry(instance.exports);
 }
 
-// A caller may pass a bare list of shapes, which is the common case, or the
-// full object when they have lines or points to buffer as well.
-const asInput = (shapes) => (Array.isArray(shapes) ? { polygons: shapes } : shapes);
+// A result is a collection of shapes, so it is accepted anywhere a collection
+// is — which is what makes `buffer(union(shapes), 15)` work without the caller
+// unpacking anything.
+const isResult = (value) =>
+  value != null && value.coordinates !== undefined && value.polygonEnds !== undefined;
+
+// An operand may be a result, a bare list of shapes, or the full object when
+// there are lines or points to buffer as well.
+const asInput = (operand) => {
+  if (operand == null) return {};
+  if (isResult(operand)) return { polygons: operand };
+  if (Array.isArray(operand)) return { polygons: operand };
+  return operand;
+};
+
+// How many shapes an operand holds, which is the operand split the module wants.
+const countShapes = (operand) => {
+  const { polygons } = asInput(operand);
+  if (polygons === undefined) return 0;
+  return isResult(polygons) ? polygons.polygonEnds.length : polygons.length;
+};
 
 /**
  * A result, in the layout the library actually produced.
@@ -115,13 +133,18 @@ class Geometry {
   }
 
   /**
-   * Grow `shapes` by `distance`, or shrink them when it is negative. Accepts
-   * `{ polygons, lines, points }` as well as a bare list of polygons; lines and
-   * points only contribute when the distance is positive, since neither has an
-   * interior to erode.
+   * Grow `shapes` by `distance`, or shrink them when it is negative. The
+   * distance may also arrive in the options — `buffer(shapes, { distance })` —
+   * which reads better when the shapes are themselves a call.
+   *
+   * Accepts a result, a list of shapes, or `{ polygons, lines, points }`. Lines
+   * and points only contribute when the distance is positive, since neither has
+   * an interior to erode.
    */
   buffer(shapes, distance, options) {
-    return this.apply(OP.buffer, shapes, [], { ...options, distance });
+    const settings = typeof distance === 'object' && distance !== null ? distance : options;
+    const metres = typeof distance === 'number' ? distance : (settings?.distance ?? 0);
+    return this.apply(OP.buffer, shapes, [], { ...settings, distance: metres });
   }
 
   /**
@@ -142,7 +165,6 @@ class Geometry {
     const { w } = this;
     const first = asInput(a);
     const second = asInput(b);
-    const polygons = [...(first.polygons ?? []), ...(second.polygons ?? [])];
     // Only the first operand contributes non-areal geometry: buffer is the one
     // operation that takes any, and it is n-ary over `a`.
     const lines = first.lines ?? [];
@@ -160,21 +182,43 @@ class Geometry {
     }
     const ringEnds = [];
     const polygonEnds = [];
-    for (const polygon of polygons) {
-      // A shape is either rings of [x, y] pairs, or the flat form a host like
-      // OpenLayers already holds. Taking both means such a host never has to
-      // explode its coordinates into pairs just to have them flattened again.
-      if (Array.isArray(polygon)) {
-        for (const ring of polygon) {
-          for (const [x, y] of ring) coordinates.push(x, y);
-          ringEnds.push(coordinates.length / 2);
-        }
-      } else {
-        const base = coordinates.length / 2;
-        for (const value of polygon.coordinates) coordinates.push(value);
-        for (const end of polygon.ringEnds) ringEnds.push(base + end);
+    // A whole result goes in as it is: one coordinate array appended once, and
+    // both index arrays shifted. No shape is unpacked and no coordinate is
+    // read, which is the point of a result having this shape in the first
+    // place — `buffer(union(shapes), 15)` costs two index loops.
+    const appendResult = (result) => {
+      const base = coordinates.length / 2;
+      const ringBase = ringEnds.length;
+      for (const value of result.coordinates) coordinates.push(value);
+      for (const end of result.ringEnds) ringEnds.push(base + end);
+      for (const end of result.polygonEnds) polygonEnds.push(ringBase + end);
+    };
+
+    for (const group of [first.polygons, second.polygons]) {
+      if (group === undefined) continue;
+      if (isResult(group)) {
+        appendResult(group);
+        continue;
       }
-      polygonEnds.push(ringEnds.length);
+      for (const shape of group) {
+        // A shape is either rings of [x, y] pairs, or the flat form a host like
+        // OpenLayers already holds. Taking both means such a host never has to
+        // explode its coordinates into pairs just to have them flattened again.
+        if (Array.isArray(shape)) {
+          for (const ring of shape) {
+            for (const [x, y] of ring) coordinates.push(x, y);
+            ringEnds.push(coordinates.length / 2);
+          }
+        } else if (isResult(shape)) {
+          appendResult(shape);
+          continue;
+        } else {
+          const base = coordinates.length / 2;
+          for (const value of shape.coordinates) coordinates.push(value);
+          for (const end of shape.ringEnds) ringEnds.push(base + end);
+        }
+        polygonEnds.push(ringEnds.length);
+      }
     }
 
     const total = coordinates.length / 2;
@@ -201,7 +245,7 @@ class Geometry {
 
     // The module wants the split rather than two blocks, so the count of
     // shapes in `a` is what separates the operands.
-    const status = w.geom_apply(op, first.polygons?.length ?? 0, distance, steps);
+    const status = w.geom_apply(op, countShapes(a), distance, steps);
     if (status) throw new Error(STATUS[status] ?? `status ${status}`);
     return this.#result();
   }
