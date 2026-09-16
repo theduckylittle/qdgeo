@@ -78,9 +78,33 @@ geo.buffer([a], 2); // grown by 2; negative shrinks
 geo.buffer([a], 2, { steps: 32 }); // finer arcs
 ```
 
-Each returns a list of shapes in the same form. The binary operations take two
-operand lists, so either side can hold several shapes; `union` and `buffer` are
-n-ary over one list.
+The binary operations take two operand lists, so either side can hold several
+shapes; `union` and `buffer` are n-ary over one list.
+
+**What comes out goes back in.** A result is a collection of shapes, so it is an
+operand anywhere one is accepted, and operations chain without unpacking
+anything:
+
+```js
+const grown = geo.buffer(geo.union(userShapes), { distance: 15 });
+const trimmed = geo.difference(grown, boundary);
+```
+
+That is not a convenience wrapper. A result carries `coordinates`, `ringEnds`
+and `polygonEnds`, and feeding it back appends one array and shifts two index
+arrays — no coordinate is read on the way in or out.
+
+```js
+const result = geo.union([a, b]);
+result.coordinates; // Float64Array, every x and y
+result.ringEnds; // Uint32Array, exclusive ends in coordinates
+result.polygonEnds; // Uint32Array, exclusive ends in rings
+result.length; // how many polygons
+result.toArrays(); // [[[x, y], ...], ...] when a host wants pairs
+```
+
+That is the layout OpenLayers keeps and deck.gl wants, which is why the
+[examples](examples/) hand it to both without touching a coordinate.
 
 The module needs no host functions and instantiates with an empty import
 object, so calling it directly is reasonable too — `geo.apply(op, a, b, opts)`

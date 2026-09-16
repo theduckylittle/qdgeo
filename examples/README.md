@@ -78,7 +78,12 @@ geo.buffer([a], 2);
 ```
 
 `union` and `buffer` are n-ary over one list. The other three take two operand
-lists, either of which may hold several shapes. A buffer `distance` may be
+lists, either of which may hold several shapes. A result is itself a collection
+of shapes, so operations chain:
+
+```js
+geo.buffer(geo.union(shapes), { distance: 15 });
+``` A buffer `distance` may be
 negative, which shrinks, and `{ steps }` is how many segments make up a quarter
 circle at a rounded corner. `distance` works on the boolean operations too —
 `geo.union([a, b], { distance: 5 })` grows the union without a second call.
