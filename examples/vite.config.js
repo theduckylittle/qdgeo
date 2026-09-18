@@ -2,14 +2,19 @@
 // Copyright (c) 2026 Dan "Ducky" Little
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 // The demos import `qdgeo` by name, the way a consumer would after installing
 // it, rather than by a relative path into a sibling directory. The alias is the
 // only thing standing in for a published package.
 export default defineConfig({
+  plugins: [react()],
   base: './',
   resolve: {
     alias: { qdgeo: resolve(import.meta.dirname, '../js/qdgeo.js') },
+  },
+  optimizeDeps: {
+    exclude: ['maplibre-gl'],
   },
   build: {
     outDir: 'dist',

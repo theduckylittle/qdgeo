@@ -47,6 +47,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            examples/package-lock.json
 
       - run: npm ci
 
@@ -55,6 +58,19 @@ jobs:
 
       - name: JavaScript binding
         run: npm run test:binding
+
+      - name: Build the examples
+        run: |
+          # The demos fetch ./qdgeo.wasm from Vite's public directory, and
+          # `qdgeo` resolves to js/ through the alias in vite.config.js.
+          mkdir -p examples/public
+          cp zig-out/bin/qdgeo.wasm examples/public/qdgeo.wasm
+          npm --prefix examples ci
+          npm run examples:build
+          for page in index canvas openlayers maplibre deckgl; do
+            test -s "examples/dist/$page.html" || { echo "missing $page.html"; exit 1; }
+          done
+          test -s examples/dist/qdgeo.wasm
 
       - name: deck.gl binary conversion
         run: npm run test:deck

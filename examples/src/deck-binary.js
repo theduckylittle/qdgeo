@@ -8,11 +8,17 @@
 // and polygons — a few hundred iterations on a parcel union whose coordinate
 // array holds tens of thousands of numbers.
 //
-// deck.gl wants, per its SolidPolygonLayer docs:
-//   length        how many polygons
-//   startIndices  the vertex each polygon starts at, plus a final total
-//   getPolygon    the flat positions, size 2
-//   vertexValid   1 everywhere except the last vertex of each ring, which is 0
+// deck.gl wants:
+//   length                how many polygons
+//   startIndices          the vertex each polygon starts at, plus a final total
+//   getPolygon            the flat positions, size 2
+//   instanceVertexValid   1 everywhere except the last vertex of each ring
+//
+// The attribute is `instanceVertexValid`, as a `{ size, value }` pair holding a
+// `Uint16Array` — not a bare `vertexValid`, which the published prose suggests
+// and which the layer silently ignores. `GeoJsonLayer` builds the same
+// structure in `geojson-layer-props.js`, and `SolidPolygonLayer` reads it at
+// `props.data.attributes.instanceVertexValid.value`; that is the contract.
 
 /** @param result {import('qdgeo').Result} */
 export function toBinary(result) {
@@ -30,7 +36,7 @@ export function toBinary(result) {
 
   // Every vertex is valid except the one closing each ring: that is how deck.gl
   // is told where a hole begins.
-  const vertexValid = new Uint8Array(vertices).fill(1);
+  const vertexValid = new Uint16Array(vertices).fill(1);
   for (let r = 0; r < ringEnds.length; r++) vertexValid[ringEnds[r] - 1] = 0;
 
   return {
@@ -38,7 +44,7 @@ export function toBinary(result) {
     startIndices,
     attributes: {
       getPolygon: { value: coordinates, size: 2 },
-      vertexValid,
+      instanceVertexValid: { size: 1, value: vertexValid },
     },
   };
 }
