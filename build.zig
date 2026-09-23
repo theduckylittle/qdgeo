@@ -55,5 +55,17 @@ pub fn build(b: *std.Build) void {
     wasm.entry = .disabled;
     wasm.rdynamic = true;
     wasm.max_memory = 512 * 1024 * 1024;
-    b.step("wasm", "Build dependency-free WASM with simd128").dependOn(&b.addInstallArtifact(wasm, .{}).step);
+    const wasm_step = b.step("wasm", "Build dependency-free WASM with simd128");
+    wasm_step.dependOn(&b.addInstallArtifact(wasm, .{}).step);
+
+    // And a second copy beside the JavaScript binding. `load()` defaults to
+    // `new URL("./qdgeo.wasm", import.meta.url)`, which is what makes the
+    // zero-argument call work in a browser and under every bundler, so the
+    // module has to sit next to `js/qdgeo.js` for the package to be usable
+    // straight out of a build.
+    wasm_step.dependOn(&b.addInstallFileWithDir(
+        wasm.getEmittedBin(),
+        .{ .custom = "../js" },
+        "qdgeo.wasm",
+    ).step);
 }

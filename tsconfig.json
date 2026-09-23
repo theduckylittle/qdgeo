@@ -1,0 +1,30 @@
+{
+  // Declarations only, generated from the JSDoc already on the binding. The
+  // library stays plain JavaScript; this exists so editors and TypeScript
+  // consumers get the same types the source documents, and so CI fails when
+  // the JSDoc and the code disagree.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    // Not beside the sources: a `js/qdgeo.d.ts` is picked up as the types for
+    // `js/qdgeo.js` on the next run, and tsc refuses to overwrite its own
+    // input. The `exports` map points consumers here.
+    "declarationDir": "types",
+    // The `imports` map in package.json makes the project root ambiguous
+    // otherwise, since `#platform` resolves per condition.
+    "rootDir": "js",
+    "strict": true,
+    // The public surface carries JSDoc types; private helpers do not, and
+    // demanding annotations on them would mean annotating the whole file to
+    // emit declarations for the few things a consumer touches.
+    "noImplicitAny": false,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["js/**/*.js"]
+}

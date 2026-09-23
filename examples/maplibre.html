@@ -9,9 +9,11 @@
 <div class="wrap">
   <h1>MapLibre GL JS</h1>
   <p class="lede">
-    MapLibre wants GeoJSON, so this page converts on the way out — a few lines, and on results this
-    small it costs well under a millisecond. The geometry is computed in Web Mercator metres and
-    converted back to longitude and latitude for the map. Drag either shape by its centre handle.
+    <a href="https://maplibre.org/">MapLibre GL JS</a> renders vector maps in WebGL. qdgeo is planar
+    and reads no coordinate system, so this page does its geometry in Web Mercator metres — a buffer
+    distance is metres — and converts back to longitude and latitude for the map.
+    <code>toArrays()</code> builds the nested form a result needs here. Drag either shape by its
+    centre handle.
   </p>
 
   <div class="panel controls">
@@ -28,11 +30,11 @@
     <fieldset id="distance-group">
       <legend>Buffer</legend>
       <input type="range" id="distance" min="-400" max="900" value="300" step="10" />
-      <span id="distance-value" style="min-width: 6ch">300 m</span>
+      <span id="distance-value" class="value">300 m</span>
     </fieldset>
   </div>
 
-  <div class="panel"><div id="map"></div></div>
+  <div class="panel"><div id="map" class="map"></div></div>
   <div class="panel out" id="out">Loading…</div>
   <p class="hint">
     Basemap tiles come from OpenStreetMap. If they do not load, the shapes still will — the style is

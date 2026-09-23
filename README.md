@@ -54,15 +54,17 @@ are correct almost everywhere and an order of magnitude slower.
 ## Getting started
 
 ```sh
-zig build wasm     # zig-out/bin/qdgeo.wasm, freestanding + simd128
+zig build wasm     # freestanding + simd128, into zig-out/bin/ and js/
 ```
 
-[`js/qdgeo.js`](js/qdgeo.js) is the binding. A shape is a list of rings, each a
-list of `[x, y]`, shell first and holes after:
+[`js/qdgeo.js`](js/qdgeo.js) is the binding, and `load()` takes no argument: it
+defaults to the `qdgeo.wasm` beside it, resolved through `import.meta.url`, so
+Vite, webpack and Node all find the module without being told where it is. A
+shape is a list of rings, each a list of `[x, y]`, shell first and holes after:
 
 ```js
-import { load } from './js/qdgeo.js';
-const geo = await load('qdgeo.wasm');
+import { load } from 'qdgeo';
+const geo = await load();
 
 const square = (x, y, w) => [
   [[x, y], [x + w, y], [x + w, y + w], [x, y + w], [x, y]],
@@ -111,19 +113,54 @@ object, so calling it directly is reasonable too — `geo.apply(op, a, b, opts)`
 is the generic form, and [Host ABI](#host-abi) describes the block layout and
 the seven exports.
 
+### Loading the module
+
+`load()` also takes a URL or path, a `Response` (or a promise of one, so
+`load(fetch(url))` works), raw bytes, or an already-compiled
+`WebAssembly.Module` — the last for a strict CSP, or to instantiate the same
+module more than once:
+
+```js
+await load();                                         // beside the binding, the default
+await load('https://example.com/qdgeo.wasm');         // anywhere else
+await load(new URL('./qdgeo.wasm', import.meta.url)); // what the default does
+await load(await WebAssembly.compile(bytes));         // compiled already
+```
+
+In Node the `file:` case is read through `node:fs` rather than fetched, because
+Node's `fetch` does not implement that scheme. The same call works in a browser,
+a worker, a bundler and a test runner.
+
+### The package
+
+ESM only, `sideEffects: false`, types generated from the JSDoc by
+`npm run types`. Four entry points:
+
+| | |
+| --- | --- |
+| `qdgeo` | the binding |
+| `qdgeo/deck` | deck.gl binary conversion |
+| `qdgeo/leaflet` | Leaflet's open rings, both directions |
+| `qdgeo/qdgeo.wasm` | the module itself, for pointing a bundler straight at it |
+
+The last is what makes a custom setup possible without guessing at paths:
+`new URL('qdgeo/qdgeo.wasm', import.meta.url)` resolves through the `exports`
+map, and a bundler fingerprints and emits it.
+
 ### Examples
 
-Four pages in [`examples/`](examples/) — plain canvas, OpenLayers, deck.gl and
-MapLibre GL JS — each running all four boolean operations and the buffer with
-live controls, and each showing what that host wants geometry to look like.
+Five pages in [`examples/`](examples/) — plain canvas, OpenLayers, deck.gl,
+MapLibre GL JS and Leaflet — each running all four boolean operations and the
+buffer with live controls, and each showing what that host wants geometry to
+look like.
 They are published from `main` at
 **[theduckylittle.github.io/qdgeo](https://theduckylittle.github.io/qdgeo/)**.
 
 To run them locally:
 
 ```sh
-zig build wasm && cp zig-out/bin/qdgeo.wasm examples/public/
-npm run examples                          # vite, on a URL it prints
+zig build wasm            # also writes js/qdgeo.wasm, which is what load() finds
+npm run examples          # vite, on a URL it prints
 ```
 
 They are a Vite project importing their dependencies from npm, including the
@@ -491,6 +528,28 @@ so both ABIs have the same five:
 Input bytes are borrowed for the duration of the call. Results go through
 `geom_clear()` like any other. Ten exports in total: seven for the coordinate
 block, three for WKB.
+
+### Host adapters, JavaScript only
+
+Two hosts have a conversion that is easy to get wrong and silent when it is, so
+the package ships them alongside the binding:
+
+```js
+import { toBinary, toOutline } from 'qdgeo/deck'; // deck.gl binary layers
+import { toLeaflet, fromLeaflet, openRings } from 'qdgeo/leaflet'; // open rings
+```
+
+They are separate entry points, load no WASM, and depend on nothing — not even
+on deck.gl or Leaflet, whose projection is passed in — so a bundler drops what
+is not imported. `qdgeo/deck` exists because deck.gl's attribute is
+`instanceVertexValid` and a bare `vertexValid` is ignored without complaint;
+`qdgeo/leaflet` because Leaflet's rings must be open where qdgeo's are closed.
+Both are covered by `tests/deck-binary.mjs` and `tests/leaflet.mjs`.
+
+Nothing else gets an adapter. OpenLayers already speaks the flat layout, and
+MapLibre needs only the binding's own `toArrays()`. The deck.gl and Leaflet
+demos in `examples/` import these rather than carrying a copy, so the pages run
+the code the tests cover.
 
 ## Zig API
 

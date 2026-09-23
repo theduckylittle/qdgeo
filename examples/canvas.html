@@ -5,47 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Canvas example</title>
 <link rel="stylesheet" href="./lib/examples.css" />
-<style>
-  select {
-    font: inherit;
-    padding: 4px 6px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--panel);
-    color: var(--ink);
-  }
-  canvas {
-    display: block;
-    width: 100%;
-    height: auto;
-    border-radius: 10px;
-    touch-action: none;
-  }
-  .key {
-    display: flex;
-    gap: 16px;
-    font-size: 0.85rem;
-    color: var(--muted);
-    margin-top: 10px;
-    flex-wrap: wrap;
-  }
-  .key i {
-    display: inline-block;
-    width: 11px;
-    height: 11px;
-    border-radius: 3px;
-    margin-right: 5px;
-    vertical-align: -1px;
-  }
-</style>
 
 <div class="wrap">
   <h1>Plain canvas</h1>
   <p class="lede">
     No mapping library, no projection — just two shapes, the WASM module, and
-    <code>&lt;canvas&gt;</code>. Drag either shape to see the result update. The buffer distance
-    applies to whichever operation is selected: on a boolean operation it grows or shrinks the
-    result.
+    <a href="https://developer.mozilla.org/docs/Web/API/Canvas_API"><code>&lt;canvas&gt;</code></a
+    >. qdgeo reads no coordinate system and works in whatever units it is handed, which here are
+    pixels, so the buffer distance below is in pixels too. It applies to every operation: on a
+    boolean it grows or shrinks the result. Drag either shape.
   </p>
 
   <div class="panel controls">
@@ -70,15 +38,15 @@
     <fieldset id="distance-group">
       <legend>Buffer</legend>
       <input type="range" id="distance" min="-40" max="60" value="18" step="1" />
-      <span id="distance-value" style="min-width: 4ch">18</span>
+      <span id="distance-value" class="value">18</span>
     </fieldset>
   </div>
 
   <div class="panel"><canvas id="c" width="960" height="520"></canvas></div>
   <div class="key">
-    <span><i style="background: var(--a)"></i>First shape</span>
-    <span><i style="background: var(--b)"></i>Second shape</span>
-    <span><i style="background: var(--accent)"></i>Result</span>
+    <span><i class="a"></i>First shape</span>
+    <span><i class="b"></i>Second shape</span>
+    <span><i class="result"></i>Result</span>
   </div>
   <div class="panel out" id="out">Loading…</div>
 </div>

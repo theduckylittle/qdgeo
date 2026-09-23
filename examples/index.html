@@ -5,98 +5,46 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>qdgeo examples</title>
 <link rel="stylesheet" href="./lib/examples.css" />
-<style>
-  /* The landing page is a narrower column with a larger heading. */
-  .wrap {
-    max-width: 760px;
-    padding: 48px 20px 64px;
-  }
-  h1 {
-    font-size: 1.9rem;
-    margin: 0 0 6px;
-    letter-spacing: -0.02em;
-  }
-  p.lede {
-    margin: 0 0 8px;
-  }
-  .size {
-    font-size: 0.9rem;
-    color: var(--muted);
-    margin: 0 0 28px;
-  }
-  .cards {
-    display: grid;
-    gap: 14px;
-  }
-  a.card {
-    display: block;
-    padding: 18px 20px;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    text-decoration: none;
-    color: inherit;
-  }
-  a.card:hover,
-  a.card:focus-visible {
-    border-color: var(--accent);
-    outline: none;
-  }
-  a.card h2 {
-    font-size: 1.05rem;
-    margin: 0 0 4px;
-    color: var(--accent);
-  }
-  a.card p {
-    margin: 0;
-    font-size: 0.92rem;
-    color: var(--muted);
-  }
-  footer {
-    margin-top: 32px;
-    font-size: 0.88rem;
-    color: var(--muted);
-  }
-  footer a {
-    color: var(--accent);
-  }
-</style>
 
-<div class="wrap">
+<div class="wrap landing">
   <h1>qdgeo examples</h1>
   <p class="lede">
     Buffer and boolean geometry running in WebAssembly. Each page does all four boolean operations
     and the buffer, with live controls, against the same module.
   </p>
-  <p class="size">The module is one file, 112 KB raw and 43.9 KB gzipped, with no host imports.</p>
+  <p class="size">The module is one file, 135 KB raw and 50.8 KB gzipped, with no host imports.</p>
 
   <div class="cards">
     <a class="card" href="canvas.html">
       <h2>Plain canvas</h2>
       <p>
-        No dependencies at all. Drag two shapes and watch the result update. Includes a
+        No dependencies and no projection. Drag two shapes and watch the result update; includes a
         ring-with-hole preset.
       </p>
     </a>
     <a class="card" href="openlayers.html">
       <h2>OpenLayers</h2>
-      <p>
-        Reads <code>getFlatCoordinates()</code> and <code>getEnds()</code> straight across, with no
-        format conversion in between.
-      </p>
+      <p>The flat layout qdgeo returns, passed in both directions with no conversion either way.</p>
     </a>
     <a class="card" href="maplibre.html">
       <h2>MapLibre GL JS</h2>
       <p>
-        Converts to GeoJSON on the way out, and does the geometry in Web Mercator so buffer
-        distances are in metres.
+        Geometry in Web Mercator metres, so a buffer distance is metres, with
+        <code>toArrays()</code> for the nested form.
+      </p>
+    </a>
+    <a class="card" href="leaflet.html">
+      <h2>Leaflet</h2>
+      <p>
+        A small, widely used mapping library, with <code>qdgeo/leaflet</code> converting in both
+        directions.
       </p>
     </a>
     <a class="card" href="deckgl.html">
       <h2>deck.gl</h2>
       <p>
-        Hands the result across as <b>binary</b>. The conversion loops over rings, never over
-        coordinates, so nothing is read or copied on the way out.
+        Flat typed arrays to the GPU, with no coordinate read or copied on the way —
+        <code>qdgeo/deck</code> is the conversion.
       </p>
     </a>
   </div>

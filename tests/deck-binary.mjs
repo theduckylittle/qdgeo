@@ -1,22 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Dan "Ducky" Little
-// The deck.gl binary conversion the demo publishes.
+// The deck.gl binary conversion the library ships as `qdgeo/deck`.
 //
-// It is example code, but it is the one piece with invariants a browser will
-// not complain about: get `startIndices` or `vertexValid` wrong and deck.gl
-// renders a plausible, wrong polygon. The assertions below are deck.gl's own
-// documented contract for SolidPolygonLayer.
+// Get `startIndices` or `vertexValid` wrong and deck.gl renders a plausible,
+// wrong polygon with no error anywhere. The assertions below are deck.gl's own
+// documented contract for SolidPolygonLayer, and `examples/src/deckgl.jsx`
+// imports exactly what is checked here.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 
-globalThis.fetch = async (url) => ({
-  ok: true,
-  status: 200,
-  arrayBuffer: async () => readFileSync(url).buffer,
-});
-const { load } = await import('../js/qdgeo.js');
-const { toBinary } = await import('../examples/src/deck-binary.js');
-const geo = await load('zig-out/bin/qdgeo.wasm');
+import { load } from '../js/qdgeo.js';
+import { toBinary, toOutline } from '../js/deck.js';
+const geo = await load();
 
 const square = (x, y, w) => [
   [
@@ -86,6 +80,18 @@ assert.deepEqual(
 // is the claim the demo makes, so it is worth asserting rather than describing.
 assert.equal(binary.attributes.getPolygon.value, result.coordinates);
 assert.equal(binary.attributes.getPolygon.size, 2);
+
+// The outline is the same positions cut into rings rather than polygons, for
+// the `PathLayer` that strokes the result. Its `startIndices` are `PathLayer`'s
+// contract: one per path, plus a final total.
+const outline = toOutline(result);
+assert.equal(outline.length, result.ringEnds.length, 'one path per ring');
+assert.equal(outline.startIndices.length, result.ringEnds.length + 1);
+assert.equal(outline.startIndices[0], 0);
+assert.equal(outline.startIndices.at(-1), result.coordinates.length / 2);
+assert.deepEqual([...outline.startIndices.slice(1)], [...result.ringEnds]);
+assert.equal(outline.attributes.getPath.value, result.coordinates, 'no copy here either');
+assert.equal(outline.attributes.getPath.size, 2);
 
 // Structure is necessary but not sufficient: the reason this test exists is
 // that a wrong attribute name renders nothing and reports no error. So run

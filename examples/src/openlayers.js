@@ -17,9 +17,10 @@ import Fill from 'ol/style/Fill.js';
 import Stroke from 'ol/style/Stroke.js';
 import Style from 'ol/style/Style.js';
 import { load } from 'qdgeo';
-import { regular, star } from '../lib/shapes.js';
+import { regular, star } from './shapes.js';
+import { OPERANDS, OSM as OSM_TILES, RESULT, rgba } from './style.js';
 
-const geo = await load('./qdgeo.wasm');
+const geo = await load();
 const out = document.getElementById('out');
 
 // This is the whole reason the library speaks flat coordinates.
@@ -55,20 +56,23 @@ const centre = fromLonLat([4.895168, 52.370216]);
 const shapeA = new Feature(new Polygon(star(centre[0] - 700, centre[1], 1500, 620)));
 const shapeB = new Feature(new Polygon(regular(centre[0] + 900, centre[1] + 200, 1200, 6)));
 
-const style = (colour, width) =>
+const style = ({ color, width, opacity }) =>
   new Style({
-    fill: new Fill({ color: colour + '22' }),
-    stroke: new Stroke({ color: colour, width }),
+    fill: new Fill({ color: rgba(color, opacity) }),
+    stroke: new Stroke({ color, width }),
   });
+// Per feature rather than per layer, so the two operands read apart.
+shapeA.setStyle(style(OPERANDS[0]));
+shapeB.setStyle(style(OPERANDS[1]));
 const operands = new VectorSource({ features: [shapeA, shapeB] });
 const results = new VectorSource();
 
 const map = new Map({
   target: 'map',
   layers: [
-    new TileLayer({ source: new OSM(), opacity: 0.55 }),
-    new VectorLayer({ source: operands, style: style('#3b6ea5', 1.5) }),
-    new VectorLayer({ source: results, style: style('#2f6f4f', 3) }),
+    new TileLayer({ source: new OSM() }),
+    new VectorLayer({ source: operands }),
+    new VectorLayer({ source: results, style: style(RESULT) }),
   ],
   view: new View({ center: centre, zoom: 12 }),
 });

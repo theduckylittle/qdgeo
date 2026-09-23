@@ -61,19 +61,52 @@ jobs:
 
       - name: Build the examples
         run: |
-          # The demos fetch ./qdgeo.wasm from Vite's public directory, and
-          # `qdgeo` resolves to js/ through the alias in vite.config.js.
-          mkdir -p examples/public
-          cp zig-out/bin/qdgeo.wasm examples/public/qdgeo.wasm
+          # The demos call `load()` with no argument, so Vite follows the
+          # binding's own `new URL('./qdgeo.wasm', import.meta.url)` and emits
+          # the module as a hashed asset. `zig build wasm` above put it beside
+          # the binding; nothing is copied into place here.
           npm --prefix examples ci
           npm run examples:build
-          for page in index canvas openlayers maplibre deckgl; do
+          for page in index canvas openlayers maplibre leaflet deckgl; do
             test -s "examples/dist/$page.html" || { echo "missing $page.html"; exit 1; }
           done
-          test -s examples/dist/qdgeo.wasm
+          ls examples/dist/assets/*.wasm >/dev/null || {
+            echo "the WASM module was not emitted as an asset"; exit 1; }
 
       - name: deck.gl binary conversion
         run: npm run test:deck
+
+      - name: Leaflet ring conversion
+        run: npm run test:leaflet
+
+      - name: Declaration types
+        run: |
+          # Generated from the JSDoc, so this fails when the two disagree.
+          npm run types
+          test -s types/qdgeo.d.ts
+
+      - name: Package manifest
+        run: |
+          # Every file the `exports` map promises has to be in the tarball.
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const [{ files }] = require("/tmp/pack.json");
+            const names = new Set(files.map((f) => f.path));
+            const pkg = require("./package.json");
+            const targets = (map) =>
+              Object.values(map ?? {}).flatMap((e) =>
+                typeof e === "string" ? [e] : Object.values(e),
+              );
+            // `imports` too: `#fs` resolves to a different file per condition,
+            // and both have to be in the tarball.
+            const wanted = [...targets(pkg.exports), ...targets(pkg.imports)];
+            const missing = wanted.filter((p) => !names.has(p.replace(/^\.\//, "")));
+            if (missing.length) {
+              console.error("not in the package:", missing.join(", "));
+              process.exit(1);
+            }
+            console.log(`packed ${files.length} files; every entry point resolves`);
+          '
 
       - name: Formatting
         run: npm run format:check

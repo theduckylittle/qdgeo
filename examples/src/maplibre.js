@@ -3,9 +3,10 @@
 import { Map as MapLibreMap, Marker } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { load } from 'qdgeo';
-import { regular, star } from '../lib/shapes.js';
+import { regular, star } from './shapes.js';
+import { OPERANDS, RESULT, osmStyle } from './style.js';
 
-const geo = await load('./qdgeo.wasm');
+const geo = await load();
 const out = document.getElementById('out');
 
 // Web Mercator, so buffer distances are in metres rather than degrees. Doing
@@ -21,9 +22,9 @@ const toLonLat = ([x, y]) => [
   (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) * (180 / Math.PI),
 ];
 
-const feature = (polygons) => ({
+const feature = (polygons, properties = {}) => ({
   type: 'Feature',
-  properties: {},
+  properties,
   geometry: {
     type: 'MultiPolygon',
     coordinates: polygons.map((p) => p.map((r) => r.map(toLonLat))),
@@ -36,38 +37,22 @@ const offsets = [
   [0, 0],
   [0, 0],
 ];
+// One shape each, which is what every call below expects: an operand is a list
+// of shapes, so a single shape is passed as `[a]`.
 const build = () => [
-  [star(origin[0] - 700 + offsets[0][0], origin[1] + offsets[0][1], 1500, 620)],
-  [regular(origin[0] + 900 + offsets[1][0], origin[1] + 200 + offsets[1][1], 1200, 6)],
+  star(origin[0] - 700 + offsets[0][0], origin[1] + offsets[0][1], 1500, 620),
+  regular(origin[0] + 900 + offsets[1][0], origin[1] + 200 + offsets[1][1], 1200, 6),
 ];
 
-// The style is inline rather than a URL, so `load` fires and the geometry works
-// even with no network at all. The raster source is a nicety; if the tiles fail
-// the background layer still gives the shapes something to sit on.
 const map = new MapLibreMap({
   container: 'map',
-  style: {
-    version: 8,
-    sources: {
-      osm: {
-        type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-        tileSize: 256,
-        attribution: '&copy; OpenStreetMap contributors',
-      },
-    },
-    layers: [
-      { id: 'background', type: 'background', paint: { 'background-color': '#e8e4dc' } },
-      { id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-opacity': 0.55 } },
-    ],
-  },
+  style: osmStyle(),
   center: toLonLat(origin),
   zoom: 11,
 });
 
 // One draggable marker per shape, which keeps the example free of any editing
 // interaction code.
-const handles = [];
 map.on('load', () => {
   map.addSource('operands', { type: 'geojson', data: collection([]) });
   map.addSource('result', { type: 'geojson', data: collection([]) });
@@ -75,25 +60,27 @@ map.on('load', () => {
     id: 'operands-fill',
     type: 'fill',
     source: 'operands',
-    paint: { 'fill-color': '#3b6ea5', 'fill-opacity': 0.15 },
+    // Data-driven, so the two operands keep the colours the other demos
+    // give them rather than sharing one.
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': OPERANDS[0].opacity },
   });
   map.addLayer({
     id: 'operands-line',
     type: 'line',
     source: 'operands',
-    paint: { 'line-color': '#3b6ea5', 'line-width': 1.5 },
+    paint: { 'line-color': ['get', 'color'], 'line-width': OPERANDS[0].width },
   });
   map.addLayer({
     id: 'result-fill',
     type: 'fill',
     source: 'result',
-    paint: { 'fill-color': '#2f6f4f', 'fill-opacity': 0.28 },
+    paint: { 'fill-color': RESULT.color, 'fill-opacity': RESULT.opacity },
   });
   map.addLayer({
     id: 'result-line',
     type: 'line',
     source: 'result',
-    paint: { 'line-color': '#2f6f4f', 'line-width': 3 },
+    paint: { 'line-color': RESULT.color, 'line-width': RESULT.width },
   });
 
   const starts = [
@@ -101,7 +88,7 @@ map.on('load', () => {
     toLonLat([origin[0] + 900, origin[1] + 200]),
   ];
   starts.forEach((position, i) => {
-    const marker = new Marker({ draggable: true, color: i ? '#b5651d' : '#3b6ea5' })
+    const marker = new Marker({ draggable: true, color: OPERANDS[i].color })
       .setLngLat(position)
       .addTo(map);
     marker.on('drag', () => {
@@ -110,7 +97,6 @@ map.on('load', () => {
       offsets[i] = [moved[0] - home[0], moved[1] - home[1]];
       update();
     });
-    handles.push(marker);
   });
   update();
 });
@@ -124,7 +110,13 @@ function update() {
   const [a, b] = build();
   map
     .getSource('operands')
-    .setData(collection(buffering ? [feature([a])] : [feature([a]), feature([b])]));
+    .setData(
+      collection(
+        buffering
+          ? [feature([a], OPERANDS[0])]
+          : [feature([a], OPERANDS[0]), feature([b], OPERANDS[1])],
+      ),
+    );
   try {
     let result;
     // Each operation has its own method; the switch is the whole of what the

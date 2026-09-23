@@ -6,16 +6,8 @@
 // host actually calls. The two are separate on purpose: a rename in the ABI
 // should break one of them loudly rather than both vaguely.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-
-// The binding fetches its module, which Node will not do for a local path.
-globalThis.fetch = async (url) => ({
-  ok: true,
-  status: 200,
-  arrayBuffer: async () => readFileSync(url).buffer,
-});
-const { load, OP, STATUS, close, Result } = await import('../js/qdgeo.js');
-const geo = await load('zig-out/bin/qdgeo.wasm');
+import { load, OP, STATUS, close, Result } from '../js/qdgeo.js';
+const geo = await load();
 
 const square = (x, y, w) => [
   [
