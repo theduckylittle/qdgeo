@@ -30,12 +30,91 @@ export const STATUS = {
   6: 'invalid options',
 };
 
-export async function load(url = '../vendor/qdgeo.wasm') {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`could not fetch ${url} (${response.status})`);
-  const { instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {});
-  return new Geometry(instance.exports);
+/**
+ * Instantiate the module.
+ *
+ * The default is the `qdgeo.wasm` sitting next to this file, resolved through
+ * `import.meta.url`, so `await load()` is correct in a browser and every
+ * bundler emits the module as an asset without being told where it is.
+ *
+ * `source` may also be a URL or path, a `Response` (or a promise of one, so
+ * `load(fetch(url))` works), raw bytes, or an already-compiled
+ * `WebAssembly.Module` — which is the one to reach for when a strict CSP rules
+ * out compiling from a fetch, or when the same module is instantiated more
+ * than once.
+ *
+ * @param source {URL | string | Response | Promise<Response> | ArrayBuffer |
+ *   ArrayBufferView | WebAssembly.Module}
+ * @returns {Promise<Geometry>}
+ */
+export async function load(source = new URL('./qdgeo.wasm', import.meta.url)) {
+  return new Geometry(await instantiate(await source));
 }
+
+/** Whatever `load` was given, as the module's exports. */
+async function instantiate(source) {
+  // Compiled already: `instantiate` hands back the instance rather than a pair.
+  if (source instanceof WebAssembly.Module) {
+    return (await WebAssembly.instantiate(source, {})).exports;
+  }
+  if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
+    return fromBytes(source);
+  }
+  if (typeof Response !== 'undefined' && source instanceof Response) {
+    return fromResponse(source);
+  }
+
+  const url = await resolve(source);
+  // Node's `fetch` rejects `file:` — "not implemented... yet..." — and that is
+  // what the default resolves to off a disk, so those are read directly. The
+  // same call then works in Node, a test runner and a browser alike.
+  if (url.protocol === 'file:') {
+    const { readFileURL } = await import('#platform');
+    return fromBytes(await readFileURL(url));
+  }
+  return fromResponse(await fetch(url));
+}
+
+const fromBytes = async (buffer) => (await WebAssembly.instantiate(buffer, {})).instance.exports;
+
+async function fromResponse(response) {
+  if (!response.ok) {
+    throw new Error(`could not fetch ${response.url} (${response.status})`);
+  }
+  // Streaming compiles while the module downloads, but it insists on
+  // `application/wasm` and plenty of static hosts do not send it. So it is
+  // tried, not assumed.
+  try {
+    return (await WebAssembly.instantiateStreaming(response.clone(), {})).instance.exports;
+  } catch {
+    return fromBytes(await response.arrayBuffer());
+  }
+}
+
+/** A path against the right base: the page, the worker, or the process. */
+async function resolve(source) {
+  if (source instanceof URL) return source;
+  const here = globalThis.document?.baseURI ?? globalThis.location?.href;
+  if (here) return new URL(source, here);
+  // Node, where a relative path means relative to the process — the way every
+  // other path handed to a script does.
+  const { base } = await import('#platform');
+  return new URL(source, await base());
+}
+
+/**
+ * The shapes these operations speak, named once so the signatures can use them.
+ *
+ * @typedef {[number, number]} Point a single x and y
+ * @typedef {Point[]} Ring a closed list of points, first equal to last
+ * @typedef {Ring[]} Shape a polygon: shell first, then holes
+ * @typedef {Shape[] | Result} Collection a list of shapes, or a result
+ * @typedef {Collection | { polygons?: Collection, lines?: Ring[], points?: Point[] }} Operand
+ *   a collection, or the longer form when there are lines or points to buffer
+ * @typedef {{ distance?: number, steps?: number }} Options
+ *   `distance` buffers the result — negative shrinks — and `steps` is how many
+ *   segments make up a quarter circle at a rounded corner
+ */
 
 // A result is a collection of shapes, so it is accepted anywhere a collection
 // is — which is what makes `buffer(union(shapes), 15)` work without the caller
@@ -71,25 +150,37 @@ const countShapes = (operand) => {
  * `toArrays()` builds the nested form on demand, for a host that wants it.
  */
 export class Result {
+  /**
+   * @param coordinates {Float64Array} every x and y, in one block
+   * @param ringEnds {Uint32Array} exclusive end of each ring, in coordinates
+   * @param polygonEnds {Uint32Array} exclusive end of each polygon, in rings
+   */
   constructor(coordinates, ringEnds, polygonEnds) {
     this.coordinates = coordinates;
     this.ringEnds = ringEnds;
     this.polygonEnds = polygonEnds;
   }
 
-  /** How many polygons. */
+  /** How many polygons. @returns {number} */
   get length() {
     return this.polygonEnds.length;
   }
 
-  /** `[[[x, y], ...], ...]` per polygon, shell first and holes after. */
+  /**
+   * `[[[x, y], ...], ...]` per polygon, shell first and holes after.
+   *
+   * @returns {Shape[]}
+   */
   toArrays() {
+    /** @type {Shape[]} */
     const out = [];
     let ring = 0;
     let point = 0;
     for (let s = 0; s < this.polygonEnds.length; s++) {
+      /** @type {Shape} */
       const polygon = [];
       for (; ring < this.polygonEnds[s]; ring++) {
+        /** @type {Ring} */
         const coords = [];
         for (; point < this.ringEnds[ring]; point++) {
           coords.push([this.coordinates[2 * point], this.coordinates[2 * point + 1]]);
@@ -101,7 +192,12 @@ export class Result {
     return out;
   }
 
-  /** Ring start and end, in coordinates, for ring `i`. */
+  /**
+   * Ring start and end, in coordinates, for ring `i`.
+   *
+   * @param i {number}
+   * @returns {[number, number]}
+   */
   ring(i) {
     return [i === 0 ? 0 : this.ringEnds[i - 1], this.ringEnds[i]];
   }
@@ -112,22 +208,49 @@ class Geometry {
     this.w = exports;
   }
 
-  /** Everything covered by any of `shapes`. N-ary: overlapping input stacks. */
+  /**
+   * Everything covered by any of `shapes`. N-ary: overlapping input stacks.
+   *
+   * @param shapes {Operand}
+   * @param [options] {Options}
+   * @returns {Result}
+   */
   union(shapes, options) {
     return this.apply(OP.union, shapes, [], options);
   }
 
-  /** Where `a` and `b` overlap. */
+  /**
+   * Where `a` and `b` overlap.
+   *
+   * @param a {Operand}
+   * @param b {Operand}
+   * @param [options] {Options}
+   * @returns {Result}
+   */
   intersection(a, b, options) {
     return this.apply(OP.intersection, a, b, options);
   }
 
-  /** In `a` and not in `b`. */
+  /**
+   * In `a` and not in `b`.
+   *
+   * @param a {Operand}
+   * @param b {Operand}
+   * @param [options] {Options}
+   * @returns {Result}
+   */
   difference(a, b, options) {
     return this.apply(OP.difference, a, b, options);
   }
 
-  /** In one of `a` and `b` but not both. */
+  /**
+   * In one of `a` and `b` but not both.
+   *
+   * @param a {Operand}
+   * @param b {Operand}
+   * @param [options] {Options}
+   * @returns {Result}
+   */
   symmetricDifference(a, b, options) {
     return this.apply(OP.symmetricDifference, a, b, options);
   }
@@ -140,6 +263,11 @@ class Geometry {
    * Accepts a result, a list of shapes, or `{ polygons, lines, points }`. Lines
    * and points only contribute when the distance is positive, since neither has
    * an interior to erode.
+   *
+   * @param shapes {Operand}
+   * @param distance {number | Options}
+   * @param [options] {Options}
+   * @returns {Result}
    */
   buffer(shapes, distance, options) {
     const settings = typeof distance === 'object' && distance !== null ? distance : options;
@@ -151,14 +279,13 @@ class Geometry {
    * The generic form the named methods above are built on. Prefer them — this
    * exists for a host that already has an operation in a variable.
    *
-   * @param op one of `OP`.
-   * @param a the first operand; a list of shapes, or `{ polygons, lines, points }`.
-   * @param b the second operand, for the binary operations. Ignored by union
+   * @param op {number} one of `OP`.
+   * @param a {Operand} the first operand.
+   * @param b {Operand} the second, for the binary operations. Ignored by union
    *   and buffer, which are n-ary over `a`.
-   * @param options.distance buffer distance, which applies to every operation:
-   *   on a boolean a nonzero distance buffers the result.
-   * @param options.steps segments per quarter circle on a rounded corner.
-   * @returns a `Result`: flat coordinates plus ring and polygon ends, with
+   * @param options {Options} `distance` applies to every operation: on a
+   *   boolean, a nonzero distance buffers the result.
+   * @returns {Result} flat coordinates plus ring and polygon ends, with
    *   `toArrays()` for the nested form.
    */
   apply(op, a, b = [], { distance = 0, steps = 16 } = {}) {
@@ -295,6 +422,13 @@ class Geometry {
 }
 
 /** Close a ring if the caller left it open. */
+/**
+ * A ring with its first point repeated at the end, if it is not already there.
+ * Every ring handed to an operation has to be closed.
+ *
+ * @param ring {Ring}
+ * @returns {Ring}
+ */
 export const close = (ring) => {
   const [fx, fy] = ring[0];
   const [lx, ly] = ring[ring.length - 1];

@@ -8,12 +8,10 @@
 <div class="wrap">
   <h1>deck.gl</h1>
   <p class="lede">
-    deck.gl takes geometry as <strong>binary</strong>: flat positions plus
-    <code>startIndices</code> and <code>instanceVertexValid</code>. That is two index loops away
-    from what this library returns — see <code>src/deck-binary.js</code>, which reads no coordinate
-    at all. Geometry runs in EPSG:3857 metres like the OpenLayers demo, so buffer distances are
-    metres; the single pass over coordinates here projects them for a longitude and latitude
-    basemap.
+    <a href="https://deck.gl/">deck.gl</a> draws large datasets on the GPU. qdgeo returns flat typed
+    arrays, so a result reaches a layer without any coordinate being read or copied —
+    <code>qdgeo/deck</code> is that conversion, and it ships with the library. The shapes are metre
+    offsets, so a buffer distance is metres on the ground.
   </p>
 
   <div id="root"></div>

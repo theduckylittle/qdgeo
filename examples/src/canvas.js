@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Dan "Ducky" Little
 import { load, close } from 'qdgeo';
-import { regular, star } from '../lib/shapes.js';
+import { regular, star } from './shapes.js';
+import { OPERANDS, RESULT, rgba } from './style.js';
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const out = document.getElementById('out');
-const css = getComputedStyle(document.documentElement);
 
 // Two operands. Each is a list of rings; ring 0 is the shell, the rest holes.
 const sets = {
@@ -70,7 +70,7 @@ function draw() {
   const distance = Number(document.getElementById('distance').value);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  let result = [],
+  let result = null,
     note = '';
   try {
     // Each operation has its own method; the switch is the whole of what the
@@ -96,33 +96,26 @@ function draw() {
     note = `<span class="err">${error.message}</span>`;
   }
 
-  for (const [polygon, colour] of [
-    [a, css.getPropertyValue('--a')],
-    ...(buffering ? [] : [[b, css.getPropertyValue('--b')]]),
-  ]) {
+  const paint = (polygon, { color, width, opacity }) => {
     polygonPath(polygon);
-    ctx.fillStyle = colour.trim() + '22';
+    ctx.fillStyle = rgba(color, opacity);
     ctx.fill('evenodd');
-    ctx.strokeStyle = colour.trim();
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
     ctx.stroke();
-  }
-  const accent = css.getPropertyValue('--accent').trim();
-  for (const polygon of result) {
-    polygonPath(polygon);
-    ctx.fillStyle = accent + '3a';
-    ctx.fill('evenodd');
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-  }
+  };
+  paint(a, OPERANDS[0]);
+  if (!buffering) paint(b, OPERANDS[1]);
+  // The operands are already nested, and `toArrays()` puts the result in the
+  // same form — one polygon at a time, shell first — so both go through the
+  // same painter.
+  if (result) for (const polygon of result.toArrays()) paint(polygon, RESULT);
 
-  const rings = result.reduce((n, p) => n + p.length, 0);
-  const points = result.reduce((n, p) => n + p.reduce((m, r) => m + r.length, 0), 0);
   out.innerHTML =
     note ||
     `<b>${result.length}</b> polygon${result.length === 1 ? '' : 's'}, ` +
-      `<b>${rings}</b> ring${rings === 1 ? '' : 's'}, <b>${points}</b> coordinates.` +
+      `<b>${result.ringEnds.length}</b> ring${result.ringEnds.length === 1 ? '' : 's'}, ` +
+      `<b>${result.coordinates.length / 2}</b> coordinates.` +
       (distance === 0
         ? ''
         : buffering
@@ -182,5 +175,5 @@ for (const radio of document.querySelectorAll('input[name=op]')) {
   });
 }
 
-geo = await load('./qdgeo.wasm');
+geo = await load();
 draw();

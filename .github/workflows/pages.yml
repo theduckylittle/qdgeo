@@ -39,20 +39,19 @@ jobs:
 
       - name: Build the site
         run: |
-          # The demos import `qdgeo` by name and fetch ./qdgeo.wasm, so the
-          # freshly built module goes into Vite's public directory first.
-          mkdir -p examples/public
-          cp zig-out/bin/qdgeo.wasm examples/public/qdgeo.wasm
+          # `zig build wasm` above wrote the module beside the binding, which is
+          # where `load()` looks; Vite emits it as a hashed asset from there.
           npm --prefix examples ci
           npm run examples:build
           mv examples/dist site
 
       - name: Check the pages the site will serve
         run: |
-          for page in index canvas openlayers maplibre deckgl; do
+          for page in index canvas openlayers maplibre leaflet deckgl; do
             test -s "site/$page.html" || { echo "missing site/$page.html"; exit 1; }
           done
-          test -s site/qdgeo.wasm
+          ls site/assets/*.wasm >/dev/null || {
+            echo "the WASM module was not emitted as an asset"; exit 1; }
           echo "site is complete"
 
       - uses: actions/configure-pages@v5

@@ -1,5 +1,9 @@
 .zig-cache/
 zig-out/
+# Built by `zig build wasm`, beside the binding so `load()` finds it.
+js/qdgeo.wasm
+# Generated from the JSDoc by `npm run types`.
+types/
 .venv/
 node_modules/
 __pycache__/
@@ -10,5 +14,4 @@ tests/compare/data/
 reduced.wkb
 examples/node_modules/
 examples/dist/
-examples/public/qdgeo.wasm
 *.swp

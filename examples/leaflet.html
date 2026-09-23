@@ -3,16 +3,16 @@
      Copyright (c) 2026 Dan "Ducky" Little -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OpenLayers example</title>
+<title>Leaflet example</title>
 <link rel="stylesheet" href="./lib/examples.css" />
 
 <div class="wrap">
-  <h1>OpenLayers</h1>
+  <h1>Leaflet</h1>
   <p class="lede">
-    <a href="https://openlayers.org/">OpenLayers</a> is a full-featured mapping library for the web.
-    qdgeo hands back one flat coordinate array plus ring and polygon ends, and that is the layout
-    this page passes in both directions — no conversion either way. Geometry runs in EPSG:3857
-    metres, so a buffer distance is metres. Drag either shape.
+    <a href="https://leafletjs.com/">Leaflet</a> is a small, widely used mapping library. qdgeo
+    works in whatever units it is given, so the geometry here runs in Web Mercator metres and a
+    buffer distance is metres on the ground. The conversion in both directions is
+    <code>qdgeo/leaflet</code>, which ships with the library.
   </p>
 
   <div class="panel controls">
@@ -35,6 +35,10 @@
 
   <div class="panel"><div id="map" class="map"></div></div>
   <div class="panel out" id="out">Loading…</div>
+  <p class="hint">
+    Basemap tiles come from OpenStreetMap. If they do not load, the shapes still will — the geometry
+    never touches the network.
+  </p>
 </div>
 
-<script type="module" src="./src/openlayers.js"></script>
+<script type="module" src="./src/leaflet.js"></script>

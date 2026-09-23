@@ -2,54 +2,33 @@
 // Copyright (c) 2026 Dan "Ducky" Little
 import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { DeckGL } from '@deck.gl/react';
+import { COORDINATE_SYSTEM } from '@deck.gl/core';
 import { PathLayer, SolidPolygonLayer } from '@deck.gl/layers';
+import { DeckGL } from '@deck.gl/react';
 import { Map } from '@vis.gl/react-maplibre';
-import { MercatorCoordinate } from 'maplibre-gl';
 import { load } from 'qdgeo';
-import { regular, star } from '../lib/shapes.js';
-import { toBinary } from './deck-binary.js';
+import { toBinary, toOutline } from 'qdgeo/deck';
+import { regular, star } from './shapes.js';
+import { OPERANDS, RESULT, osmStyle, rgb } from './style.js';
 
-const geo = await load('./qdgeo.wasm');
+const geo = await load();
 
-// Geometry runs in EPSG:3857 metres, the same as the OpenLayers demo, so a
-// buffer distance is a distance and not a number of degrees. Web Mercator
-// metres are inflated by 1/cos(latitude) — about 1.6x at Amsterdam — so they are
-// metres in the sense that matters here and not in the surveying sense.
-const EQUATOR = 2 * Math.PI * 6378137;
-const toMercator = (lngLat) => {
-  const { x, y } = MercatorCoordinate.fromLngLat(lngLat);
-  return [(x - 0.5) * EQUATOR, (0.5 - y) * EQUATOR];
-};
-const toLngLat = ([x, y]) =>
-  new MercatorCoordinate(x / EQUATOR + 0.5, 0.5 - y / EQUATOR).toLngLat().toArray();
-
-const ORIGIN = [4.895168, 52.370216]; // Amsterdam, as in the OpenLayers demo
-const CENTRE = toMercator(ORIGIN);
-const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+const ORIGIN = [4.895168, 52.370216]; // Amsterdam
+const MAP_STYLE = osmStyle();
 const INITIAL_VIEW_STATE = { longitude: ORIGIN[0], latitude: ORIGIN[1], zoom: 12 };
 
-// Two operands, in metres either side of the centre.
-const shapeA = star(CENTRE[0] - 700, CENTRE[1], 1500, 620);
-const shapeB = regular(CENTRE[0] + 900, CENTRE[1] + 200, 1200, 6);
+// The geometry is metres from `ORIGIN`, which is what `METER_OFFSETS` reads, so
+// deck.gl does the placing and nothing here reads a coordinate. A buffer
+// distance is then metres on the ground, the units the slider already claims.
+const PROJ = {
+  coordinateSystem: COORDINATE_SYSTEM.METER_OFFSETS,
+  coordinateOrigin: ORIGIN,
+};
 
-/**
- * Project a result for the basemap, into a new array.
- *
- * Never over the result's own: projecting in place works once and destroys the
- * coordinates on any second pass, and nothing here guarantees it runs once.
- */
-function projected(result) {
-  const source = result.coordinates;
-  const coordinates = new Float64Array(source.length);
-  for (let i = 0; i < source.length; i += 2) {
-    const [lng, lat] = toLngLat([source[i], source[i + 1]]);
-    coordinates[i] = lng;
-    coordinates[i + 1] = lat;
-  }
-  return { coordinates, ringEnds: result.ringEnds, polygonEnds: result.polygonEnds };
-}
-const projectShape = (shape) => shape.map((ring) => ring.map(toLngLat));
+// Two operands, either side of the origin.
+const shapeA = star(-700, 0, 1500, 620);
+const shapeB = regular(900, 200, 1200, 6);
+const OPERAND_SHAPES = [shapeA, shapeB];
 
 /** The boolean operation. `buffer` has none of its own, so it takes shape A. */
 function combine(op) {
@@ -122,7 +101,7 @@ function Controls({ op, distance, onChange }) {
           value={distance}
           onChange={(event) => onChange(op, Number(event.target.value))}
         />
-        <span style={{ minWidth: '6ch' }}>{distance} m</span>
+        <span className="value">{distance} m</span>
       </fieldset>
     </div>
   );
@@ -136,9 +115,9 @@ function Summary({ op, distance, shape, error }) {
       </div>
     );
   }
-  const polygons = shape ? shape.length : 0;
-  const rings = shape ? shape.ringEnds.length : 0;
-  const points = shape ? shape.coordinates.length / 2 : 0;
+  const polygons = shape.length;
+  const rings = shape.ringEnds.length;
+  const points = shape.coordinates.length / 2;
   return (
     <div className="panel out">
       <b>{polygons}</b> polygon{polygons === 1 ? '' : 's'}, <b>{rings}</b> ring
@@ -162,49 +141,79 @@ function Summary({ op, distance, shape, error }) {
 
 function Result({ op, distance, shape }) {
   const layers = useMemo(() => {
-    const operands = (op === 'buffer' ? [shapeA] : [shapeA, shapeB]).flatMap((outline) =>
-      projectShape(outline).map((ring) => ({ path: ring })),
-    );
+    // Each operand keeps its own colour, so one accessor covers both.
+    const shown = op === 'buffer' ? [OPERAND_SHAPES[0]] : OPERAND_SHAPES;
+    const rings = shown.flatMap((outline, i) => outline.map((ring) => ({ ring, i })));
+    // A new id per geometry, so deck.gl builds a layer rather than updating
+    // one. Its tesselator's buffers are allocated at the high-water mark and
+    // never shrink, so a layer kept across a change carries every vertex of
+    // the widest shape it has held.
+    const key = `${op}-${distance}`;
+    const drawn = shape && shape.length;
     return [
+      new SolidPolygonLayer({
+        id: 'operand-fill',
+        ...PROJ,
+        data: shown.map((outline, i) => ({ outline, i })),
+        getPolygon: (d) => d.outline,
+        getFillColor: (d) => rgb(OPERANDS[d.i].color, OPERANDS[d.i].opacity),
+        stroked: false,
+      }),
       new PathLayer({
-        id: 'operands',
-        data: operands,
-        getPath: (d) => d.path,
-        getColor: [140, 170, 210],
-        getWidth: 1.5,
+        id: 'operand-line',
+        ...PROJ,
+        data: rings,
+        getPath: (d) => d.ring,
+        getColor: (d) => rgb(OPERANDS[d.i].color),
+        getWidth: OPERANDS[0].width,
         widthUnits: 'pixels',
       }),
-      shape &&
-        shape.length &&
+      drawn &&
         new SolidPolygonLayer({
-          // A new id per geometry, so deck.gl builds a layer rather than
-          // updating one. Its tesselator's buffers are allocated at the
-          // high-water mark and never shrink, so a layer kept across a change
-          // carries every vertex of the widest shape it has held.
-          id: `result-${op}-${distance}`,
+          id: `result-fill-${key}`,
+          ...PROJ,
           // `_normalize: false` is what lets deck.gl skip its own reformatting,
           // which is the point of handing it binary.
-          data: toBinary(projected(shape)),
+          data: toBinary(shape),
           _normalize: false,
-          getFillColor: [86, 160, 255, 140],
+          getFillColor: rgb(RESULT.color, RESULT.opacity),
           filled: true,
           stroked: false,
+        }),
+      // `SolidPolygonLayer` only fills, so the outline every other demo draws
+      // is a second layer over the same positions.
+      drawn &&
+        new PathLayer({
+          id: `result-line-${key}`,
+          ...PROJ,
+          data: toOutline(shape),
+          // `_pathType` is the `PathLayer` counterpart of `_normalize`: it
+          // tells the layer the rings need no reformatting. They arrive
+          // closed, so 'open' draws every segment including the last.
+          _pathType: 'open',
+          getColor: rgb(RESULT.color),
+          getWidth: RESULT.width,
+          widthUnits: 'pixels',
         }),
     ].filter(Boolean);
   }, [op, distance, shape]);
 
   return (
     <div className="panel">
-      <DeckGL
-        initialViewState={INITIAL_VIEW_STATE}
-        controller={true}
-        layers={layers}
-        // DeckGL forwards `style`, `width`, `height` and `id` only — a
-        // `className` here is dropped and the map collapses to nothing.
-        style={{ position: 'relative', height: 520, borderRadius: 10, overflow: 'hidden' }}
-      >
-        <Map reuseMaps mapStyle={MAP_STYLE} />
-      </DeckGL>
+      <div className="map">
+        <DeckGL
+          initialViewState={INITIAL_VIEW_STATE}
+          controller={true}
+          layers={layers}
+          // DeckGL sizes itself 100% of its parent, which is what `.map` is
+          // for. `style` is passed rather than `className`: DeckGL forwards
+          // `style`, `width`, `height` and `id` only, and drops the rest. The
+          // default position is `absolute`, which would take it out of flow.
+          style={{ position: 'relative' }}
+        >
+          <Map reuseMaps mapStyle={MAP_STYLE} />
+        </DeckGL>
+      </div>
     </div>
   );
 }

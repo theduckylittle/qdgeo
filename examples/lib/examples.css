@@ -60,10 +60,12 @@ h1 {
   letter-spacing: -0.01em;
 }
 
+/* No measure cap: the lede runs the full width of the wrap, so it lines up
+   with the panels below it rather than stopping short of them. */
+
 p.lede {
   margin: 0 0 20px;
   color: var(--muted);
-  max-width: 64ch;
 }
 
 code {
@@ -118,12 +120,25 @@ input[type='range'] {
   accent-color: var(--accent);
 }
 
-/* The map demos both use a full-width map of the same height. */
+/* The map demos share one map box. Only this rule sets a height; every
+   mapping library fills its container, so the element inside is 100% of it. */
 
-#map {
+.map {
   height: 520px;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.map > * {
+  height: 100%;
+}
+
+/* The value beside a slider. Fixed width so the map does not shift as the
+   number grows. */
+
+.value {
+  display: inline-block;
+  min-width: 6ch;
 }
 
 /* Result readout */
@@ -148,4 +163,121 @@ input[type='range'] {
   font-size: 0.85rem;
   color: var(--muted);
   margin-top: 10px;
+}
+
+/* Canvas demo */
+
+select {
+  font: inherit;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  touch-action: none;
+}
+
+/* Its legend, which is the one page that draws the two operands apart. */
+
+.key {
+  display: flex;
+  gap: 16px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.key i {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.key .a {
+  background: var(--a);
+}
+
+.key .b {
+  background: var(--b);
+}
+
+.key .result {
+  background: var(--accent);
+}
+
+/* Landing page: a narrower column, a larger heading, and the demo cards. */
+
+.wrap.landing {
+  max-width: 760px;
+  padding: 48px 20px 64px;
+}
+
+.landing h1 {
+  font-size: 1.9rem;
+  margin: 0 0 6px;
+  letter-spacing: -0.02em;
+}
+
+.landing p.lede {
+  margin: 0 0 8px;
+}
+
+.size {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0 0 28px;
+}
+
+.cards {
+  display: grid;
+  gap: 14px;
+}
+
+a.card {
+  display: block;
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+
+a.card:hover,
+a.card:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+a.card h2 {
+  font-size: 1.05rem;
+  margin: 0 0 4px;
+  color: var(--accent);
+}
+
+a.card p {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+footer {
+  margin-top: 32px;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+footer a {
+  color: var(--accent);
 }
