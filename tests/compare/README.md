@@ -6,19 +6,36 @@ Don't read the native Zig unit tests as a substitute for it.
 
 ## Reproduce
 
-From the repository root, using Zig 0.16.0, Node 22+, Python 3.13 and Rust 1.88+:
+From the repository root, using Zig 0.16.0, Node 22+ and Python 3.13:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r tests/compare/requirements.txt
 npm ci --ignore-scripts
-cargo build --release --locked --target wasm32-unknown-unknown --manifest-path tests/compare/rust/Cargo.toml
 zig build native -Doptimize=ReleaseSafe
 zig build wasm
-node tests/wasm.mjs
+npm run check                              # correctness first; this suite measures
+npm run fetch-data                         # once: the dataset, SHA-256 verified
 .venv/bin/python tests/compare/run.py --repeats 5
 .venv/bin/python tests/compare/probes.py
 ```
+
+**Rust is optional**, and only for the rust-geo column. `rust/` is a shim that
+puts rust-geo behind qdgeo's own flat ABI and compiles it to `wasm32`, so the
+comparison is WASM against WASM in one Node host at one timing boundary — it
+builds nothing the library ships. With Rust 1.88+:
+
+```sh
+cargo build --release --locked --target wasm32-unknown-unknown --manifest-path tests/compare/rust/Cargo.toml
+```
+
+Without it, rust-geo drops out: its column reads `—`, `environment.rust` in the
+report is `null`, and every other engine is measured as usual.
+
+This is the only suite that needs Python, GEOS or a dataset. Correctness —
+`src/tests.zig`, the WASM artifact, the binding, the adapters and the JTS
+Topology Suite — needs Zig and Node and runs in about two seconds. See
+[`../../TESTING.md`](../../TESTING.md).
 
 Default input: `~/Projects/geomoose/gm3/examples/desktop/parcels.geoparquet`.
 Override with `--source PATH`. Only geometry is read/exported: no owner names,

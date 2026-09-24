@@ -6,7 +6,8 @@ description: Run qdgeo's full correctness sweep — native tests, the JTS Topolo
 # Verifying correctness
 
 Four layers, cheapest first. Run all of them before publishing a claim about
-correctness; run the first two before any commit that touches the overlay.
+correctness; run the first two — which is `npm run check` — before any commit
+that touches the overlay.
 
 Speed belongs to the `compare` skill. This one is only about answers.
 
@@ -43,26 +44,27 @@ Compare areas against GEOS whenever the failure count drops.
    zig build test && zig build test -Doptimize=ReleaseSafe; echo "exit=$?"
    ```
 
-2. **WASM runtime checks** — asserts the import list is empty, which a
-   `std.debug.print` left in a hot path will break:
+2. **Everything above the ABI**, in one command. vitest over the WASM runtime
+   checks (which assert the import list is empty — a `std.debug.print` left in a
+   hot path breaks it), the binding, both adapters, and the JTS Topology Suite.
+   `pretest` rebuilds the artifact, so there is nothing to remember:
 
    ```sh
-   zig build wasm && npm run test:wasm; echo "exit=$?"
+   set -o pipefail
+   npm test; echo "exit=$?"
    ```
 
-3. **The JTS Topology Suite.** JTS's own XML, copied verbatim:
+   The JTS baseline is **155 passing of 158 applicable assertions**, with 15
+   skipped — 12 non-areal, and 3 from one case JTS's own `WKTReader` will not
+   load. The 3 failures are all degenerate rings and are the documented
+   rejection policy, not bugs; they are named in `POLICY_FAILURES` and asserted
+   with `test.fails`, so both a regression and an unexpected fix report the
+   specific case rather than moving a number.
 
-   ```sh
-   zig build native -Doptimize=ReleaseSafe
-   .venv/bin/python tests/jts/run.py; echo "exit=$?"
-   ```
+   Steps 1 and 2 together are `npm run check`. They need Zig and Node and
+   nothing else, and take about two seconds.
 
-   The baseline is **155 of 161 applicable assertions**, with 12 skipped as
-   non-areal. The 6 failures are all degenerate rings and are the documented
-   rejection policy, not bugs — `--expect 155` gates on the number so a drop
-   fails loudly while the policy stays.
-
-4. **The cluster corpora.** Not in any fixture file; generated from the parcel
+3. **The cluster corpora.** Not in any fixture file; generated from the parcel
    dataset. This is the layer that finds overlay defects:
 
    ```sh
@@ -80,7 +82,7 @@ Compare areas against GEOS whenever the failure count drops.
    on or past an endpoint. They are documented in the README under "When valid
    input fails". If that number moves either way, find out why before shipping.
 
-5. **The differential suite**, if the change could alter geometry rather than
+4. **The differential suite**, if the change could alter geometry rather than
    only fail differently:
 
    ```sh

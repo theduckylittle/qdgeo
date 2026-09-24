@@ -35,7 +35,7 @@ import { fromLeaflet, openRings, toLeaflet } from 'qdgeo/leaflet';
 Those are the two conversions with invariants a browser will not complain about
 — a wrong deck.gl attribute name renders nothing, and Leaflet's rings must not
 repeat their first point — so they ship with the library and are covered by
-`tests/deck-binary.mjs` and `tests/leaflet.mjs`, against deck.gl's own
+`tests/deck.test.mjs` and `tests/leaflet.test.mjs`, against deck.gl's own
 tesselator and a full Leaflet round trip. The demos run exactly the code those
 tests check. OpenLayers and MapLibre need no adapter, so those two pages do
 their conversion inline, in a handful of lines each.

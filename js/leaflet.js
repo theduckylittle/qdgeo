@@ -11,7 +11,7 @@
 // is explicit that the first point should not be repeated, and qdgeo's rings
 // are always closed. Getting that wrong is silent in a browser — an extra point
 // draws a zero-length segment, a missing one draws a polygon that looks almost
-// right — so `tests/leaflet.mjs` round-trips both directions.
+// right — so `tests/leaflet.test.mjs` round-trips both directions.
 
 /**
  * One shape's rings, open, as Leaflet's constructors want them.

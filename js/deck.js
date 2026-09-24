@@ -8,7 +8,7 @@
 //
 // This exists because deck.gl's binary contract is easy to get subtly wrong and
 // the mistakes are silent: a wrong attribute name renders nothing, a wrong
-// index renders a plausible but incorrect polygon. `tests/deck-binary.mjs`
+// index renders a plausible but incorrect polygon. `tests/deck.test.mjs`
 // checks both functions against deck.gl's own tesselator.
 //
 // The conversion reads no coordinate. It walks rings and polygons — a few

@@ -22,10 +22,10 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: Unit tests
+      - name: Zig unit tests
         run: zig build test
 
-      - name: Unit tests, ReleaseSafe
+      - name: Zig unit tests, ReleaseSafe
         run: zig build test -Doptimize=ReleaseSafe
 
       - name: Build every target
@@ -53,11 +53,16 @@ jobs:
 
       - run: npm ci
 
-      - name: WASM runtime checks
-        run: npm run test:wasm
+      # The deck.gl and Leaflet adapter tests run against the real libraries,
+      # which live in the examples' dependencies, so they are installed before
+      # the suite rather than after it. Without them those two files would skip,
+      # and `tests/deck.test.mjs` fails outright rather than skipping under CI.
+      - run: npm --prefix examples ci
 
-      - name: JavaScript binding
-        run: npm run test:binding
+      - name: Tests
+        # vitest: the ABI, the binding, both adapters, and the JTS suite.
+        # `pretest` runs `zig build wasm`, which is already cached by now.
+        run: npm test
 
       - name: Build the examples
         run: |
@@ -65,19 +70,12 @@ jobs:
           # binding's own `new URL('./qdgeo.wasm', import.meta.url)` and emits
           # the module as a hashed asset. `zig build wasm` above put it beside
           # the binding; nothing is copied into place here.
-          npm --prefix examples ci
           npm run examples:build
           for page in index canvas openlayers maplibre leaflet deckgl; do
             test -s "examples/dist/$page.html" || { echo "missing $page.html"; exit 1; }
           done
           ls examples/dist/assets/*.wasm >/dev/null || {
             echo "the WASM module was not emitted as an asset"; exit 1; }
-
-      - name: deck.gl binary conversion
-        run: npm run test:deck
-
-      - name: Leaflet ring conversion
-        run: npm run test:leaflet
 
       - name: Declaration types
         run: |
@@ -113,15 +111,3 @@ jobs:
 
       - name: Zig formatting
         run: zig fmt --check build.zig src
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: JTS Topology Suite
-        run: |
-          python -m pip install --quiet shapely
-          # The six failures are a documented policy choice about invalid input,
-          # so --strict would always trip. Gate on the baseline instead: a drop
-          # below it is a regression, and raising it is a deliberate commit.
-          python tests/jts/run.py --expect 155
