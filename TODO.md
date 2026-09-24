@@ -105,13 +105,14 @@ and polyclip-ts and Turf where they are less accurate than GEOS.
 **All 26 workloads pass, native and WASM**, against GEOS's 26, JSTS's 24,
 Turf's 23 and Rust Geo's 18.
 
-**155 of 161 applicable JTS Topology Suite assertions pass**, from JTS's own
+**155 of 158 applicable JTS Topology Suite assertions pass**, from JTS's own
 test XML copied verbatim into `tests/jts/cases/` — including **120 of 120** for
 the four boolean operations, across both the original overlay engine and
-OverlayNG. 12 cases are skipped because their expected result is not areal, and
-counted separately rather than scored as passes.
+OverlayNG. 15 cases are skipped — 12 because their expected result is not areal,
+and 3 from one case JTS's own `WKTReader` will not load — and counted separately
+rather than scored as passes.
 
-The 6 failures are all degenerate polygons — zero-area or under-four-point rings
+The 3 failures are all degenerate polygons — zero-area or under-four-point rings
 that JTS buffers as linework and qdgeo rejects as invalid input. That is the
 "failures are errors, not repairs" policy meeting JTS's leniency, so it is a
 decision to take rather than a bug to fix. Running the suite is how it was
@@ -139,7 +140,7 @@ arrays candidates, which is a large change against a 1.02x observed ceiling.
 **WASM is fixed and import-free.** `zig build wasm` compiles again — the break
 was `std.debug.print` dragging `std.posix` into a
 `wasm32-freestanding` target. The artifact is 110,394 bytes stripped (43,209
-gzipped), declares no imports at all, and needs no WASI host. `tests/wasm.mjs`
+gzipped), declares no imports at all, and needs no WASI host. `tests/wasm.test.mjs`
 instantiates it with an empty import object and asserts the import list is
 empty.
 
@@ -706,7 +707,7 @@ tells a caller in advance whether their input will take that path.
       extrapolated ceiling marked as extrapolated, the 1.8x cost of the retry
       path, and the batching recipe with its warning that small batches raise
       the failure rate.
-- [x] **Recoverable exhaustion is now tested.** `tests/wasm.mjs` buffers a
+- [x] **Recoverable exhaustion is now tested.** `tests/wasm.test.mjs` buffers a
       999,999-point ring, which asks for far more than the 512 MiB cap allows,
       and asserts the call returns status 1 rather than trapping and that the
       next call still works. Sizing matters: from a clean heap 400,000 points
@@ -730,7 +731,7 @@ tells a caller in advance whether their input will take that path.
       Same decision as above, recorded for the same reason: a snapped result
       answers a slightly different question than the one that was asked.
 
-This costs 6 of 161 JTS assertions, all degenerate rings, and it is why the
+This costs 3 of 158 JTS assertions, all degenerate rings, and it is why the
 adjudicated vertex error is `0 m`. The two are the same decision.
 
 ### 4. The correctness claims have to be reproducible by someone else
@@ -1365,7 +1366,8 @@ permanent. The rest of the Python is not about performance at all.
 | job | files | can it be Zig? |
 | --- | --- | --- |
 | measure qdgeo's own speed | (none — ad-hoc probes) | **yes, easily** |
-| compare answers against other implementations | `run.py`, `probes.py`, `jts/run.py` | no, and it should not be |
+| compare answers against other implementations | `run.py`, `probes.py` | no, and it should not be |
+| ~~run the JTS suite~~ | ~~`jts/run.py`~~ | **done — JSTS, not Zig** (see below) |
 
 The comparison harness exists to run GEOS, JSTS, Turf, polyclip-ts and Rust Geo.
 Those are Python and JavaScript by nature. Reimplementing the oracle in Zig would
@@ -1388,15 +1390,33 @@ per-phase cycles. Roughly **150 lines and an afternoon**:
 This removes Python from the performance loop entirely and makes the numbers
 reproducible by `zig build bench` rather than by reconstructing a probe.
 
-### Medium effort: the JTS runner
+### Done, and not the way this section predicted: the JTS runner
 
-`tests/jts/run.py` is 311 lines and needs only two things from Python: a WKT
-parser and a topological equality test. A Zig WKT reader is ~300 lines for the
-2D types qdgeo supports. Equality is harder — it currently delegates to GEOS,
-and replacing it with area plus Hausdorff in Zig is another ~200 lines and a
-weaker check. **About a week, and it trades away GEOS as the arbiter.** Not
-obviously worth it; the JTS cases are already vendored, so the suite reproduces
-anywhere Python exists.
+The analysis below was right that the runner needed only a WKT parser and a
+topological equality test, and right that writing both in Zig was a bad trade.
+It missed the third option.
+
+> ~~`tests/jts/run.py` is 311 lines and needs only two things from Python: a WKT
+> parser and a topological equality test. A Zig WKT reader is ~300 lines for the
+> 2D types qdgeo supports. Equality is harder — it currently delegates to GEOS,
+> and replacing it with area plus Hausdorff in Zig is another ~200 lines and a
+> weaker check. **About a week, and it trades away GEOS as the arbiter.**~~
+
+**JSTS already had both, and it is JTS.** The runner is now
+`tests/jts/jts.test.mjs`, and the reference side — WKT reading, `equalsTopo`,
+area, `DiscreteHausdorffDistance` — is JTS's own code ported to JavaScript.
+That is a *better* arbiter than GEOS for a suite whose entire claim is fidelity
+to JTS, not a weaker one, and JSTS was already a dev dependency because the
+comparison suite measures it. The XML is four element names deep and is read in
+`tests/jts/cases.mjs`; it never needed a parser library.
+
+It also moved the suite from the native `.so` to the shipped WASM artifact
+through the shipped binding, so the thing under test is the thing that ships.
+Same 155 passing assertions. One case shifts from 3 failures to 3 skips because
+JTS's own `WKTReader` refuses a three-point LinearRing where Shapely allows it —
+which is JTS's answer to that input, so the suite now reflects it.
+
+Afternoon, not a week. Python is gone from the correctness path entirely.
 
 ### Not advisable: the differential suite
 
@@ -1409,6 +1429,12 @@ tooling has.
 **Recommendation:** do `zig build bench`, leave the rest. The benefit is not
 fewer languages — it is that a performance claim becomes a command anyone can
 run, instead of a probe that has to be rebuilt from a note.
+
+The two processes are now split and documented in `TESTING.md`: correctness
+needs Zig and Node and runs in about two seconds; comparison keeps Python
+because Shapely *is* GEOS, and keeps Rust as an optional extra because
+`tests/compare/rust/` builds only the rust-geo shim. `zig build bench` would
+close the last gap — measuring qdgeo's own speed without the oracle present.
 
 ## Stale documentation
 

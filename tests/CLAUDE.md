@@ -1,49 +1,61 @@
 # tests/CLAUDE.md
 
-Context for the test suites. The root `CLAUDE.md` covers the library; this file
-covers how it is checked, because the three suites answer three different
-questions and it is easy to quote one as though it answered another.
+Context for the test suites. The root `CLAUDE.md` covers the library and
+[`TESTING.md`](../TESTING.md) covers how to run things; this file covers the
+handful of decisions that are easy to get wrong from inside `tests/`.
 
-| Suite | Question it answers | Run |
-| --- | --- | --- |
-| `src/tests.zig` | Does the code do what we intended? | `zig build test` |
-| `tests/jts/` | Does it match the reference implementation's own tests? | `npm run test:jts` |
-| `tests/compare/` | Is it right and fast on real parcel data, against live engines? | `npm run compare` |
-| `tests/wasm.mjs` | Does the browser artifact load and run with no host? | `npm run test:wasm` |
+Two processes, and conflating them is the recurring mistake:
 
-**None of them substitutes for another.** `zig build test` passing says nothing
-about the parcel suite. Quote the number from the suite that measured it.
+| | Answers | Tools | Run |
+| --- | --- | --- | --- |
+| Correctness | Is it right? | Zig, Node | `npm run check` |
+| Comparison | Is it fast, and how does it compare? | + Python/GEOS, Rust, parcel data | `npm run compare` |
+
+**No suite substitutes for another.** `zig build test` passing says nothing
+about the JTS suite, and the JTS suite says nothing about the parcel data.
+Quote the number from the suite that measured it.
+
+## The correctness suites — `npm test`
+
+vitest over `tests/**/*.test.mjs`. One process per file (`pool: 'forks'`),
+because the ABI keeps module-level state and `wasm.test.mjs` deliberately
+exhausts the 512 MiB heap.
+
+`pretest` runs `zig build wasm`, so the artifact under test is never stale and
+there is no setup step to forget.
+
+- **`wasm.test.mjs`** drives the raw exports; **`binding.test.mjs`** drives
+  `js/qdgeo.js`. They are separate on purpose: a rename in the ABI should break
+  one of them loudly rather than both vaguely.
+- **`deck.test.mjs`** and **`leaflet.test.mjs`** need the examples'
+  dependencies (`npm --prefix examples ci`) to run the real libraries over the
+  output. Without them they skip; under `CI` they throw instead, because a
+  structural-only pass is exactly what those two files exist to catch.
 
 ## `tests/jts/` — the JTS Topology Suite's own cases
 
-The XML in `cases/` is copied **verbatim** from JTS (see `cases/NOTICE.md`,
-EDL-1.0). That is the point: "passes the JTS suite" has to mean the actual
-suite. Never hand-edit a case to make it pass — if a case is genuinely out of
-scope, it belongs in the skip path with a reason, where it is counted and
+The XML in `cases/` is copied **verbatim** from JTS (`cases/NOTICE.md`,
+EDL-1.0). Never hand-edit a case to make it pass — if a case is genuinely out
+of scope it belongs in a `test.skip` with a reason, where it is counted and
 printed separately.
 
-Three rules in `run.py` are load-bearing and non-obvious:
+The reference side is **JSTS**: JTS itself, ported to JavaScript. That is what
+makes the matcher constants JTS's own rather than a reimplementation of them,
+and it is what let this suite drop Python and Shapely entirely.
 
-- **Buffers run at `quadrantSegments = 8`.** That is JTS's default and therefore
-  what the expected geometry in `TestBuffer.xml` was generated with. At qdgeo's
-  own default of 16 the arcs are *finer* than JTS's, and the resulting area
-  difference alone exceeds the matcher's tolerance. Finer is not closer here.
-- **Buffer uses a tolerance matcher, overlay does not.** `TestBuffer.xml` names
-  `BufferResultMatcher` in its own `<resultMatcher>` element, because a rounded
-  buffer is an approximation whose vertices are implementation-specific.
-  `run.py` applies the same two tests that class applies, with JTS's constants:
-  symmetric-difference area relative to the larger input (`1e-3`), and boundary
-  Hausdorff scaled by the distance (`distance / 100`, floored at `1e-8`).
-  Overlay is exact, so overlay results must be *topologically equal*, full stop.
-- **Non-areal expected results are skipped, not passed.** qdgeo returns polygons
-  only, by design. An overlay whose expected answer is a Point, LineString or
-  GeometryCollection is out of scope, and counting it as a pass would inflate
-  the number that gets quoted.
+Four load-bearing, non-obvious rules — `TESTING.md` explains each in full:
 
-Out of the wider JTS suite, only three files are in scope: area-area overlay,
-OverlayNG area, and buffer. `cases/NOTICE.md` records why the rest are not —
-mostly fixed precision models, which qdgeo rejects outright, and operations it
-does not have.
+- Buffers run at `quadrantSegments = 8` (JTS's default). Finer is not closer.
+- Buffer uses `BufferResultMatcher`'s tolerances; overlay must be exactly
+  topologically equal.
+- Non-areal expected results are skipped, not passed.
+- The three invalid-input failures are named in `POLICY_FAILURES` and asserted
+  with `test.fails`. There is no `--expect N` gate any more: a count cannot tell
+  you *which* case changed, and an unexpected pass now reports itself.
+
+`cases.mjs` reads the XML directly. JTS's format is four element names deep with
+no entities, no CDATA and no namespaces, which is small enough not to justify a
+dependency — and a dependency is what the Python runner really was.
 
 ## `tests/compare/` — the differential suite
 
@@ -57,6 +69,14 @@ where they are less accurate than GEOS.
 
 **Never widen a tolerance to clear a Hausdorff failure.** Reconstruct the vertex
 and find out who is wrong. `tests/compare/README.md` has the method.
+
+This is the one place Python belongs, and it is not glue: Shapely *is* GEOS, and
+GEOS is the independent second opinion the whole suite is built on. Replacing it
+with Zig would be qdgeo checking qdgeo.
+
+Rust is **optional**. `rust/` builds only the rust-geo comparison shim; without
+`cargo build` that engine drops out of the run and everything else is still
+measured.
 
 Timing boundaries are **not** equal across engines, and the differences are big
 enough to change conclusions — qdgeo and Rust Geo are the only symmetric pair.
@@ -75,18 +95,14 @@ look entirely normal.
 
 ## What CI gates
 
-`.github/workflows/ci.yml` runs the Zig tests, all four build targets, the WASM
-runtime checks, Prettier, `zig fmt`, and the JTS suite on every push.
+`.github/workflows/ci.yml` runs the Zig tests in Debug and ReleaseSafe, all four
+build targets, `npm test`, the examples build, the declaration types, the
+package manifest, Prettier and `zig fmt` on every push. Zig and Node; no Python
+step, no Rust step.
 
-The JTS step uses `--expect 155`, not `--strict`. Six failures are the
-documented invalid-input policy, so `--strict` would always fail. If you make a
-JTS case pass, raise the number in the workflow in the same commit — that is
-what keeps the baseline honest.
-
-The differential suite is deliberately **not** in CI: it needs Rust, GEOS, the
-parcel dataset and several npm engines, and its timings are meaningless on a
-shared runner. Run `npm run compare` locally before claiming a performance
-change.
+The differential suite is deliberately **not** in CI: it needs GEOS, the parcel
+dataset and several npm engines, and its timings are meaningless on a shared
+runner. Run `npm run compare` locally before claiming a performance change.
 
 ## Adding tests
 

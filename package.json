@@ -36,18 +36,17 @@
     "LICENSE.txt"
   ],
   "scripts": {
-    "test:wasm": "node tests/wasm.mjs",
-    "test:binding": "node tests/binding.mjs",
-    "test:deck": "node tests/deck-binary.mjs",
-    "test:leaflet": "node tests/leaflet.mjs",
+    "pretest": "zig build wasm",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "zig build test && zig build test -Doptimize=ReleaseSafe && npm test",
     "examples": "npm --prefix examples run dev",
     "examples:build": "npm --prefix examples run build",
     "compare": ".venv/bin/python tests/compare/run.py",
-    "format": "prettier --write \"**/*.{js,jsx,mjs,html}\"",
-    "format:check": "prettier --check \"**/*.{js,jsx,mjs,html}\"",
-    "test:jts": ".venv/bin/python tests/jts/run.py",
     "fetch-data": ".venv/bin/python tests/compare/fetch.py",
     "sizes": "node tests/compare/sizes/run.mjs",
+    "format": "prettier --write \"**/*.{js,jsx,mjs,html}\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,mjs,html}\"",
     "types": "node -e \"require('node:fs').rmSync('types',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "prepack": "zig build wasm && npm run types"
   },
@@ -58,6 +57,7 @@
     "jsts": "^2.12.1",
     "polyclip-ts": "0.16.8",
     "prettier": "3.9.6",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.1"
   }
 }

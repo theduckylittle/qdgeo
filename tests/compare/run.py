@@ -24,6 +24,12 @@ OP_UNION, OP_BUFFER = 0, 4
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'tests/compare/generated'
 
+def version(tool, *args):
+    try:
+        return subprocess.check_output([tool, *(args or ['--version'])], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
 def measure(fn, repeats):
     fn()
     times = []
@@ -225,7 +231,9 @@ def main():
         python=platform.python_version(), geos=shapely.geos_version_string, shapely=shapely.__version__,
         node=subprocess.check_output(['node','--version'],text=True).strip(),
         zig=subprocess.check_output(['zig','version'],text=True).strip(),
-        rust=subprocess.check_output(['rustc','--version'],text=True).strip(),
+        # Rust builds only the rust-geo comparison shim, so it is optional:
+        # without it that engine drops out and everything else still runs.
+        rust=version('rustc'),
         polyclip_ts='0.16.8', turf='7.4.0', jsts='2.12.1', rust_geo='0.33.1',
         repeats=args.repeats, reused_external=args.reuse_external), results=rows)
     (OUT/'report.json').write_text(json.dumps(report,indent=2))
