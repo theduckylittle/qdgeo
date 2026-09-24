@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Dan "Ducky" Little
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import * as polyclip from 'polyclip-ts';
 import turfUnion from '@turf/union';
@@ -22,11 +22,22 @@ if (WebAssembly.Module.imports(wasmModule).length)
 const w = new WebAssembly.Instance(wasmModule, {}).exports;
 // rust-geo behind the same flat ABI, in this same host, so the comparison is
 // WASM against WASM with one interchange format and one timing boundary.
+//
+// Rust is the one toolchain this suite needs that nothing else in the project
+// does, and it only builds this comparison shim. So it is optional: without
+// `cargo build` having been run, rust-geo drops out of the run and every other
+// engine is still measured. The report records which engines were present, so
+// a missing column is visible rather than silently absent.
 const rustPath = 'tests/compare/rust/target/wasm32-unknown-unknown/release/geo_comparison.wasm';
-const rustModule = new WebAssembly.Module(readFileSync(rustPath));
-if (WebAssembly.Module.imports(rustModule).length)
-  throw new Error('rust-geo WASM gained host imports');
-const rust = new WebAssembly.Instance(rustModule, {}).exports;
+let rust;
+if (existsSync(rustPath)) {
+  const rustModule = new WebAssembly.Module(readFileSync(rustPath));
+  if (WebAssembly.Module.imports(rustModule).length)
+    throw new Error('rust-geo WASM gained host imports');
+  rust = new WebAssembly.Instance(rustModule, {}).exports;
+} else {
+  console.error(`rust-geo skipped: ${rustPath} is missing (see tests/compare/README.md)`);
+}
 function rustGeo(flat, c) {
   const n = flat.coordinates.length / 2;
   const ptr = rust.rg_input(n, flat.ringEnds.length, flat.polygonEnds.length);
@@ -183,6 +194,7 @@ for (const c of fixture.cases) {
   const flat = encode(c.geometries);
   for (const engine of ['zig-wasm', 'rust-geo', 'jsts', 'polyclip-ts', 'turf']) {
     if (engine === 'polyclip-ts' && c.operation !== 'union') continue;
+    if (engine === 'rust-geo' && !rust) continue;
     const isWasm = engine === 'zig-wasm' || engine === 'rust-geo';
     // A lone geometry still goes through the union engine in all union tests.
     const fn =

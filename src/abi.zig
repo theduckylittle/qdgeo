@@ -49,9 +49,9 @@ pub fn status(err: anyerror) u32 {
 // --- The coordinate ABI ------------------------------------------------------
 //
 // One block in, one block out, in the layout OpenLayers already holds. See
-// `src/flat.zig` for the layout; `tests/wasm.mjs` has a working host. There is
-// no other shape to contrast this with, so nothing here says "flat": the WKB
-// entry points in `abi_wkb.zig` are the ones that need a qualifier.
+// `src/flat.zig` for the layout; `tests/wasm.test.mjs` has a working host.
+// There is no other shape to contrast this with, so nothing here says "flat":
+// the WKB entry points in `abi_wkb.zig` are the ones that need a qualifier.
 
 /// Reserve the input block and hand back its address. The host then writes
 /// `2 * coordinates` f64 followed by `rings + polygons + line_strings` u32 into

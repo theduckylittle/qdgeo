@@ -65,22 +65,29 @@ Keeping new code compiling on both is still worth doing while it is this cheap;
 
 ```sh
 zig build                                  # static library + module
-zig build test                             # 22 native tests
-zig build test -Doptimize=ReleaseSafe
 zig build run                              # rounded rectangle demo
 zig build native -Doptimize=ReleaseSafe    # zig-out/lib/libqdgeo_native.so
 zig build wasm                             # freestanding, import-free, stripped
+
+# Correctness. Zig + Node, nothing else, about two seconds.
+npm run check                              # zig build test x2, then every JS suite
+zig build test                             # 22 native tests
+zig build test -Doptimize=ReleaseSafe
+npm test                                   # vitest: ABI, binding, adapters, JTS
+npm test -- tests/jts                      # one file or directory
+npm run test:watch                         # vitest, re-running on save
+
+# Comparison. Local and opt-in; needs GEOS, the dataset, optionally Rust.
 npm run fetch-data                         # parcels.geoparquet for the compare suite
 npm run compare                            # differential suite (see the `compare` skill)
 npm run sizes                              # bundle sizes for every engine
-node tests/wasm.mjs                        # WASM runtime checks, no WASI
-npm run format:check                       # Prettier, JS and HTML
-.venv/bin/python tests/compare/run.py      # differential suite (needs harness fixes)
 .venv/bin/python tests/compare/probes.py   # precision probes
-.venv/bin/python tests/jts/run.py           # the JTS Topology Suite's own cases
+
+npm run format:check                       # Prettier, JS and HTML
 ```
 
-Harness setup (venv, `npm ci`, `cargo build --release`) is in
+`TESTING.md` is the full account of both processes. Comparison-harness setup
+(venv, `npm ci`, the optional `cargo build --release`) is in
 `tests/compare/README.md`. The comparison dataset is
 `~/Projects/geomoose/gm3/examples/desktop/parcels.geoparquet` (4,040 parcels,
 135,080 points, sha256 `764c0d0a…`); override with `--source`.
@@ -318,6 +325,11 @@ Three things there are load-bearing and easy to break:
 
 ## Conventions and invariants
 
+- **Documentation aims at a 10th grade reading level**, in a professional but
+  casual voice — the way you would explain something to a colleague who knows
+  the field but not this codebase. Short sentences beat long ones, plain words
+  beat formal ones, and what a thing does comes before why it is built that way.
+  This applies to every `.md` file here, not just the README.
 - **Allocators are explicit.** `Geometry` owns an arena; call `deinit` once and
   never copy it as an independently owned value. Results never borrow input.
 - **Coordinates are planar, in input units.** No CRS is read from or written to
@@ -342,7 +354,7 @@ Three things there are load-bearing and easy to break:
 - **Invalid input is rejected, and that is a product decision, not an
   omission.** It is documented in the README under "Invalid input" as an
   explicit divergence from JTS/GEOS, and it is why the adjudicated vertex error
-  is `0 m`. It costs 6 JTS assertions, all degenerate rings. Repair belongs
+  is `0 m`. It costs 3 JTS assertions, all degenerate rings. Repair belongs
   upstream in the caller's own pipeline; do not add a fixer here.
 - **Failures are errors, not repairs.** Note that JTS and GEOS do *not* hold this
   line for buffer — they fall back to snap-rounded integer grids. See
@@ -413,7 +425,7 @@ Three things there are load-bearing and easy to break:
 
 Single-threaded and non-reentrant. **Seven exports in the WASM build**:
 `geom_input`, `geom_apply`, the four `geom_result_*` accessors, and
-`geom_clear`. That is the entire browser surface; `tests/wasm.mjs` asserts the
+`geom_clear`. That is the entire browser surface; `tests/wasm.test.mjs` asserts the
 import list is empty.
 
 The native library adds three for WKB: `geom_wkb_apply`, `geom_wkb_result_ptr`
@@ -460,11 +472,11 @@ free a borrowed result, never feed a borrowed result back as input.
 - The WASM build must stay import-free. Anything reaching for stderr — including
   `std.debug.print` — drags `std.posix` into `wasm32-freestanding` and fails on
   `IOV_MAX`. Guard any diagnostic behind a comptime target check, the way
-  `operations.zig` does; `tests/wasm.mjs` asserts the import list is empty.
+  `operations.zig` does; `tests/wasm.test.mjs` asserts the import list is empty.
 - **`zig build test` passing does not mean the parcel suite passes**, and
-  neither implies the JTS suite. See `tests/CLAUDE.md` — the three suites answer
-  three different questions. All currently green: 22 native tests, 26 of 26
-  differential workloads native and WASM, and 155 of 161 applicable JTS
+  neither implies the JTS suite. See `TESTING.md` and `tests/CLAUDE.md` — the
+  suites answer different questions. All currently green: 22 native tests, 26 of
+  26 differential workloads native and WASM, and 155 of 158 applicable JTS
   assertions.
 - **The boundary metric adjudicates against exact arithmetic** (details in
   `tests/CLAUDE.md`), because GEOS is not a positional oracle on this data — it misplaces nearly parallel

@@ -74,12 +74,16 @@ session.
 ## Steps
 
 1. **Build everything the suite measures.** All three, or the run compares a
-   stale artifact:
+   stale artifact. The Rust build is only the rust-geo shim — if it is skipped,
+   that column reads `—` and `environment.rust` is `null`, which is fine for a
+   run that is not quoting rust-geo and is a silent gap in one that is:
 
    ```sh
    zig build wasm && zig build native -Doptimize=ReleaseSafe
    (cd tests/compare/rust && cargo build --release --target wasm32-unknown-unknown)
    ```
+
+   Check `environment.rust` in the report before quoting a rust-geo number.
 
 2. **Fetch the parcel dataset** if it is not already there. Public GeoMoose demo
    data, SHA-256 verified:

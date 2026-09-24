@@ -9,7 +9,7 @@ boolean operations, so "subtract this, then grow the result by 5 m" is one call.
 That is very nearly all the geometry a web mapping application asks for. The WASM artifact is **135 KB raw, 50.8 KB gzipped**,
 declares no imports, and has no C or C++ dependency.
 
-> **Status.** The suites are green: 26 of 26 differential workloads, 155 of 161
+> **Status.** The suites are green: 26 of 26 differential workloads, 155 of 158
 > applicable JTS assertions, and 0 failures across 57,990 buffers of adjacent
 > parcel clusters. The memory envelope is
 > [measured and published](#memory-and-what-size-input-this-is-good-for), and
@@ -171,12 +171,20 @@ a demo harness. See [examples/README.md](examples/README.md).
 
 ```sh
 zig build                                 # static library/module
-zig build test                            # 21 tests
-zig build test -Doptimize=ReleaseSafe
 zig build run                             # rounded rectangle example
 zig build native -Doptimize=ReleaseSafe   # zig-out/lib/libqdgeo_native.so
-node tests/wasm.mjs                       # Node runtime checks, no WASI
 ```
+
+### Testing
+
+```sh
+npm run check     # zig build test, twice, then every JavaScript suite
+```
+
+Zig and Node, about two seconds, nothing else to install. That covers the
+geometry, the WASM artifact, the binding, both adapters and the JTS Topology
+Suite. The differential suite against GEOS and four other engines is a separate,
+opt-in process. [TESTING.md](TESTING.md) covers both.
 
 ## Design goals
 
@@ -338,7 +346,7 @@ case where **valid** input can fail. See the next section.
 That is why they answer where qdgeo errors. It is also why a snapped result
 answers a slightly different question than the one you asked.
 
-This choice costs qdgeo 6 of 161 JTS assertions, all degenerate rings, and it is
+This choice costs qdgeo 3 of 158 JTS assertions, all degenerate rings, and it is
 why the vertex error above reads `0 m`. The two are the same decision.
 
 **What to do about it.** Clean your geometry first. Repair belongs upstream,
@@ -411,7 +419,7 @@ Two things that are measured rather than extrapolated:
   not a running total. A long-lived page does not creep.
 - **Running out is recoverable.** An allocation the heap cannot satisfy returns
   status `1`, not a trap, and the next call works normally.
-  `tests/wasm.mjs` asserts both.
+  `tests/wasm.test.mjs` asserts both.
 
 The one case that costs noticeably more is an input that fails and gets retried:
 the fallback described in [When valid input fails](#when-valid-input-fails) runs
@@ -432,29 +440,34 @@ port of it. `tests/jts/cases/` holds JTS's own test XML, copied **verbatim**
 under EDL-1.0, so "passes the JTS suite" means the actual suite.
 
 ```sh
-zig build native -Doptimize=ReleaseSafe
-npm run test:jts
+npm test -- tests/jts
 ```
 
 | File | pass | fail | skip |
 | --- | ---: | ---: | ---: |
 | `TestOverlayAA.xml` | 40 | 0 | 4 |
 | `TestNGOverlayA.xml` | 80 | 0 | 8 |
-| `TestBuffer.xml` | 35 | 6 | 0 |
-| **Total** | **155** | **6** | **12** |
+| `TestBuffer.xml` | 35 | 3 | 3 |
+| **Total** | **155** | **3** | **15** |
 
 **Every boolean operation assertion passes: 120 of 120**, across both JTS's
 original overlay engine and OverlayNG.
 
-The 12 skips expect a Point, LineString, or GeometryCollection. qdgeo returns
-polygons only, so they are out of scope and are counted separately rather than
-scored as passes. The 6 failures are all degenerate rings — see
-[Invalid input](#invalid-input).
+Twelve of the skips expect a Point, LineString, or GeometryCollection. qdgeo
+returns polygons only, so they are out of scope and are counted separately
+rather than scored as passes. The other three belong to one case,
+`POLYGON ((0 0, 10 10, 0 0))`, that JTS's own `WKTReader` refuses to load at
+all — three points is not a LinearRing. The 3 failures are degenerate rings —
+see [Invalid input](#invalid-input). They are named individually and asserted
+with `test.fails`, so an unexpected *pass* is reported too.
 
-Buffers run at `quadrantSegments = 8`, which is JTS's default and what the
-expected geometry was generated with. Buffer results use the tolerance
-comparison `TestBuffer.xml` asks for by name; overlay results must be exactly
-equal. [tests/CLAUDE.md](tests/CLAUDE.md) covers both.
+The reference side of this suite is JSTS — JTS itself, ported to JavaScript —
+rather than a second implementation of JTS's comparison rules. `BufferResultMatcher`'s
+constants and `DiscreteHausdorffDistance` are JTS's own. Buffers run at
+`quadrantSegments = 8`, which is JTS's default and what the expected geometry
+was generated with. Buffer results use the tolerance comparison
+`TestBuffer.xml` asks for by name; overlay results must be exactly equal.
+[TESTING.md](TESTING.md) covers both.
 
 ## Host ABI
 
@@ -544,7 +557,7 @@ on deck.gl or Leaflet, whose projection is passed in — so a bundler drops what
 is not imported. `qdgeo/deck` exists because deck.gl's attribute is
 `instanceVertexValid` and a bare `vertexValid` is ignored without complaint;
 `qdgeo/leaflet` because Leaflet's rings must be open where qdgeo's are closed.
-Both are covered by `tests/deck-binary.mjs` and `tests/leaflet.mjs`.
+Both are covered by `tests/deck.test.mjs` and `tests/leaflet.test.mjs`.
 
 Nothing else gets an adapter. OpenLayers already speaks the flat layout, and
 MapLibre needs only the binding's own `toArrays()`. The deck.gl and Leaflet
@@ -635,23 +648,27 @@ and the invariants that are easy to break.
 
 Two workflows in [`.github/workflows/`](.github/workflows/).
 
-**`ci.yml`** runs on every push and pull request: unit tests in Debug and
-ReleaseSafe, all four build targets, the WASM runtime checks, Prettier, `zig fmt`,
-and the JTS Topology Suite. It prints the artifact size to the run summary, so a
-change that inflates the download is visible in the pull request.
+**`ci.yml`** runs on every push and pull request: the Zig tests in Debug and
+ReleaseSafe, all four build targets, `npm test` — the WASM runtime checks, the
+binding, both adapters and the JTS Topology Suite — the examples build, the
+generated declaration types, the package manifest, Prettier and `zig fmt`. It
+needs Zig and Node and nothing else, and it prints the artifact size to the run
+summary, so a change that inflates the download is visible in the pull request.
 
-The JTS step is gated with `--expect 155` rather than `--strict`. The six
-failures are the [invalid input](#invalid-input) policy, so `--strict` would
-always trip; a drop below the baseline is a regression, and raising the baseline
-is a deliberate commit.
+The JTS suite has no count-based gate. The three [invalid input](#invalid-input)
+failures are named in `POLICY_FAILURES` and asserted with `test.fails`, so a
+regression and an unexpected fix both name the case rather than moving a
+number.
 
 **`pages.yml`** rebuilds the WASM module, assembles `examples/` into a site with
 the fresh module, checks every page is present, and deploys to GitHub Pages.
 Enable it once under **Settings → Pages → Source → GitHub Actions**.
 
-The differential comparison suite is not in CI. It needs a Rust toolchain, GEOS,
-the parcel dataset and several npm engines, and it measures timings, which a
-shared runner cannot do meaningfully. Run it locally with `npm run compare`.
+The differential comparison suite is not in CI. It needs GEOS, the parcel
+dataset and several npm engines — and optionally a Rust toolchain for the
+rust-geo shim — and it measures timings, which a shared runner cannot do
+meaningfully. Run it locally with `npm run compare`; [TESTING.md](TESTING.md)
+lists what it needs and what is optional.
 
 Neither are the parcel cluster corpora, for the same reason — they need the
 dataset. They are the layer that has caught every overlay defect this engine has
