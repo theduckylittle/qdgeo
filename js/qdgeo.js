@@ -19,16 +19,63 @@ export const OP = {
   buffer: 4,
 };
 
-/** What a nonzero status from the module means. */
+/**
+ * The code on a `QdgeoError` — a name, not a number, so a branch reads at the
+ * call site and a typo fails the type check instead of silently matching.
+ *
+ * @typedef {'OUT_OF_MEMORY' | 'UNSUPPORTED_GEOMETRY' | 'LIMIT_EXCEEDED' |
+ *   'COORDINATE_RANGE' | 'INVALID_GEOMETRY' | 'INVALID_OPTIONS' |
+ *   'UNREPRESENTABLE'} Code
+ */
+
+/** The module's numeric statuses, as the codes a `QdgeoError` carries. */
 export const STATUS = {
-  0: 'ok',
-  1: 'out of memory',
-  2: 'unsupported geometry',
-  3: 'limit exceeded',
-  4: 'coordinate out of range',
-  5: 'malformed geometry, or the arrangement could not be resolved',
-  6: 'invalid options',
+  0: 'OK',
+  1: 'OUT_OF_MEMORY',
+  2: 'UNSUPPORTED_GEOMETRY',
+  3: 'LIMIT_EXCEEDED',
+  4: 'COORDINATE_RANGE',
+  5: 'INVALID_GEOMETRY',
+  6: 'INVALID_OPTIONS',
+  7: 'UNREPRESENTABLE',
 };
+
+/** What each code means, for the error message. */
+const DESCRIPTION = {
+  OUT_OF_MEMORY: 'the heap could not hold this call',
+  UNSUPPORTED_GEOMETRY: 'unsupported geometry',
+  LIMIT_EXCEEDED: 'limit exceeded',
+  COORDINATE_RANGE: 'coordinate out of range',
+  INVALID_GEOMETRY: 'malformed geometry, or the arrangement could not be resolved',
+  INVALID_OPTIONS: 'invalid options',
+  UNREPRESENTABLE: 'valid input, but the arrangement is not representable in f64',
+};
+
+/**
+ * What an operation throws, carrying a `code` to branch on so nothing has to
+ * match message text.
+ *
+ * The distinction that matters is `INVALID_GEOMETRY` against
+ * `UNREPRESENTABLE`. The first means the input was bad — fix the geometry.
+ * The second means the input was valid and the answer still could not be
+ * built, because a crossing's exact intersection rounds onto or past a
+ * segment endpoint; retrying is pointless, and the README's "When valid input
+ * fails" section says what helps. `OUT_OF_MEMORY` is worth a branch too:
+ * smaller (but not too small) batches usually fit.
+ */
+export class QdgeoError extends Error {
+  /**
+   * @param status {number} the module's nonzero status
+   * @param [message] {string} overrides the code's description
+   */
+  constructor(status, message) {
+    const code = STATUS[status] ?? `STATUS_${status}`;
+    super(message ?? `${code}: ${DESCRIPTION[code] ?? 'unknown status'}`);
+    this.name = 'QdgeoError';
+    /** @type {Code} the reason, as a name a branch can read */
+    this.code = /** @type {Code} */ (code);
+  }
+}
 
 /**
  * Instantiate the module.
@@ -203,7 +250,11 @@ export class Result {
   }
 }
 
-class Geometry {
+/**
+ * The instantiated module: one method per operation, plus the generic `apply`.
+ * `load()` is the only way to construct one.
+ */
+export class Geometry {
   constructor(exports) {
     this.w = exports;
   }
@@ -332,7 +383,8 @@ class Geometry {
     }
 
     const ptr = w.geom_input(total, rings, shapes, lines.length, points.length);
-    if (!ptr && total !== 0) throw new Error('the library could not allocate an input block');
+    if (!ptr && total !== 0)
+      throw new QdgeoError(1, 'the library could not allocate an input block');
     const xy = new Float64Array(w.memory.buffer, ptr, 2 * total);
     const index = new Uint32Array(w.memory.buffer, ptr + 16 * total, rings + shapes + lines.length);
 
@@ -392,7 +444,7 @@ class Geometry {
     // The module wants the split rather than two blocks, so the count of
     // shapes in `a` is what separates the operands.
     const status = w.geom_apply(op, countShapes(a), distance, steps);
-    if (status) throw new Error(STATUS[status] ?? `status ${status}`);
+    if (status) throw new QdgeoError(status);
     return this.#result();
   }
 

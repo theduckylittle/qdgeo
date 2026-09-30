@@ -6,7 +6,7 @@
 // what a host actually calls. The two are separate on purpose: a rename in the
 // ABI should break one of them loudly rather than both vaguely.
 import { afterAll, describe, expect, test } from 'vitest';
-import { load, OP, STATUS, close, Result } from '../js/qdgeo.js';
+import { load, OP, STATUS, QdgeoError, close, Result } from '../js/qdgeo.js';
 import { area, nestedArea } from './support/area.mjs';
 
 const geo = await load();
@@ -66,9 +66,25 @@ describe('the five operations', () => {
     expect(area(geo.union([a, b], { distance: 1 }))).toBeGreaterThan(175);
   });
 
-  test('a failure is an Error carrying the status text, not a silent wrong answer', () => {
-    expect(() => geo.buffer([a], 1, { steps: 0 })).toThrow(/invalid options/);
-    expect(STATUS[6]).toBe('invalid options');
+  test('a failure is a QdgeoError carrying a named code, not a silent wrong answer', () => {
+    expect(() => geo.buffer([a], 1, { steps: 0 })).toThrow(/INVALID_OPTIONS/);
+    let caught;
+    try {
+      geo.buffer([a], 1, { steps: 0 });
+    } catch (err) {
+      caught = err;
+    }
+    // The code is the contract, and it is a name, never a bare number:
+    // INVALID_GEOMETRY means fix your input, UNREPRESENTABLE means f64 could
+    // not hold the arrangement, OUT_OF_MEMORY means try larger batches.
+    expect(caught).toBeInstanceOf(QdgeoError);
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.code).toBe('INVALID_OPTIONS');
+    // The map ties the module's numeric statuses to the names, so a host on
+    // the raw ABI can translate; 5 and 7 are the split that matters.
+    expect(STATUS[6]).toBe('INVALID_OPTIONS');
+    expect(STATUS[5]).toBe('INVALID_GEOMETRY');
+    expect(STATUS[7]).toBe('UNREPRESENTABLE');
   });
 });
 

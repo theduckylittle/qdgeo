@@ -6,8 +6,9 @@ written in Zig and compiled to WebAssembly.
 qdgeo does five things: union, intersection, difference, symmetric difference,
 and rounded buffer. The buffer is also available as an option on the four
 boolean operations, so "subtract this, then grow the result by 5 m" is one call.
-That is very nearly all the geometry a web mapping application asks for. The WASM artifact is **135 KB raw, 50.8 KB gzipped**,
-declares no imports, and has no C or C++ dependency.
+That is very nearly all the geometry a web mapping application asks for. The
+WASM artifact is **133.5 KB raw, 50.5 KB gzipped**, declares no imports, and has
+no C or C++ dependency.
 
 > **Status.** The suites are green: 26 of 26 differential workloads, 155 of 158
 > applicable JTS assertions, and 0 failures across 57,990 buffers of adjacent
@@ -25,12 +26,12 @@ declares no imports, and has no C or C++ dependency.
 
 | | size gzipped | speed | correct | operations bundled |
 | --- | ---: | ---: | ---: | --- |
-| **qdgeo** | **50.8 KB** | **1.00x** | **26 / 26** | four booleans, buffer |
-| polyclip-ts | 15.4 KB | 28x | 10 / 12 | four booleans, **no buffer** |
-| JSTS | 73.9 KB | 7.1x | 24 / 26 | four booleans, buffer |
+| **qdgeo** | **50.5 KB** | **1.00x** | **26 / 26** | four booleans, buffer |
+| polyclip-ts | 15.4 KB | 26x | 10 / 12 | four booleans, **no buffer** |
+| JSTS | 73.9 KB | 7.7x | 24 / 26 | four booleans, buffer |
 | Turf | 82.3 KB | 17x | 23 / 26 | union, buffer |
-| Rust Geo | 102.1 KB | 0.80x | 18 / 26 | union, buffer |
-| GEOS | 778 KB † | 1.5x † | 26 / 26 | all of GEOS |
+| Rust Geo | 102.1 KB | 0.89x | 18 / 26 | union, buffer |
+| GEOS | 778 KB † | 1.4x † | 26 / 26 | all of GEOS |
 
 Speed is the geometric mean against qdgeo over each engine's **correct**
 workloads; lower is faster. Size is what a browser downloads — JavaScript
@@ -134,7 +135,10 @@ a worker, a bundler and a test runner.
 ### The package
 
 ESM only, `sideEffects: false`, types generated from the JSDoc by
-`npm run types`. Four entry points:
+`npm run types`. The same doc comments also produce the
+**[API reference](https://theduckylittle.github.io/qdgeo/api/)**, published
+beside the examples; `npm run docs` builds it locally into `docs/api/`. Four
+entry points:
 
 | | |
 | --- | --- |
@@ -207,12 +211,12 @@ The shipped WASM keeps its runtime safety checks. They are close to free:
 
 | | raw | gzipped | speed | output |
 | --- | ---: | ---: | ---: | --- |
-| `ReleaseSafe` (shipped) | 135 KB | 50.8 KB | 1.00x | — |
-| `ReleaseFast` | 135 KB | 48.3 KB | 1.11x | bit-identical |
+| `ReleaseSafe` (shipped) | 133.5 KB | 50.5 KB | 1.00x | — |
+| `ReleaseFast` | 134.0 KB | 48.2 KB | 1.11x | bit-identical |
 
-`ReleaseFast` is 11% faster, the same size raw and 2.5 KB smaller gzipped, and
+`ReleaseFast` is 11% faster, 0.5 KB larger raw and 2.4 KB smaller gzipped, and
 produces byte-for-byte identical geometry across all 26 workloads.
-`ReleaseSmall` reaches 73 KB raw and 32.6 KB gzipped if size ever matters more
+`ReleaseSmall` reaches 72.0 KB raw and 32.5 KB gzipped if size ever matters more
 than either.
 
 ## The parcel dataset
@@ -237,11 +241,15 @@ Every engine runs the same parcel dataset over 26 workloads covering all four
 boolean operations and buffer. Every figure is the **median of three independent
 suite runs, each itself a median of 11 repeats**, on one idle machine.
 
-Three runs because one is not reproducible enough to publish: between two clean
-runs the JavaScript engines' geometric means moved by up to 31%, and Turf's
-smallest cases by 300%, which is JIT warmup rather than anything about the
-geometry. qdgeo, GEOS and Rust Geo stayed within 11%. Ratios are quoted to two
-significant figures because the third is noise.
+Three runs because one is not reproducible enough to publish. Across the three,
+engine geometric means moved by up to 18%, and individual cases by far more:
+JSTS's `donut-buffer--1` spanned 0.27-1.2 ms and qdgeo's own `edge-point-contact`
+0.015-0.066 ms. Sub-millisecond cases are dominated by scheduling and JIT warmup
+rather than by geometry, and that reaches the WASM engines too, not only the
+JavaScript ones. The large workloads are steady: the
+4,040-parcel union held within 1% for qdgeo and 5% for every engine except GEOS,
+which spanned 406-514 ms. Ratios are quoted to two significant figures because
+the third is noise.
 
 **A wrong answer is not a fast answer.** Where an engine returns the wrong
 geometry its time is marked †, and it is excluded from every average. Rust Geo
@@ -279,10 +287,10 @@ Milliseconds. † marks a wrong answer.
 
 | parcels | qdgeo wasm | qdgeo native | GEOS | Rust Geo | JSTS | Turf | polyclip-ts |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 0.32 | 0.12 | 0.28 | 0.052 † | 14.6 | 3.01 | 5.96 |
-| 100 | 1.49 | 1.15 | 4.11 | 0.37 † | 44.2 | 24.4 | 25.9 |
-| 1,000 | 20.3 | 16.8 | 65.7 | 2.63 † | 533 † | 495 † | 513 † |
-| 4,040 | 160 | 130 | 426 | 14.5 † | 3640 † | 3710 † | 3770 † |
+| 10 | 0.21 | 0.12 | 0.26 | 0.043 † | 12 | 3.2 | 4.6 |
+| 100 | 1.4 | 1.1 | 4.0 | 0.36 † | 37 | 21 | 22 |
+| 1,000 | 21 | 17 | 66 | 3.5 † | 450 † | 410 † | 420 † |
+| 4,040 | 150 | 130 | 410 | 14 † | 3400 † | 3500 † | 3700 † |
 
 On the two largest unions, only qdgeo and GEOS return the right geometry.
 
@@ -290,11 +298,11 @@ On the two largest unions, only qdgeo and GEOS return the right geometry.
 
 | case | qdgeo wasm | GEOS | Rust Geo | JSTS | Turf |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 parcel, +2 m | 0.046 | 0.057 | 0.034 | 0.35 | 1.17 |
-| 100 parcels, +2 m | 1.30 | 4.54 | 0.35 | 32.7 | 29.5 |
-| 100 parcels, -10 m | 1.46 | 4.36 | 0.51 † | 32.9 | 30.2 |
-| 19,208-coordinate parcel, +2 m | 33.2 | 8.25 | 53.2 | 29.1 | 90.0 |
-| 19,208-coordinate parcel, -2 m | 31.9 | 13.0 | 66.8 | 28.7 | 82.7 |
+| 1 parcel, +2 m | 0.046 | 0.056 | 0.034 | 0.34 | 1.0 |
+| 100 parcels, +2 m | 1.3 | 4.3 | 0.36 | 30 | 27 |
+| 100 parcels, -10 m | 1.5 | 4.3 | 0.47 † | 31 | 28 |
+| 19,208-coordinate parcel, +2 m | 31 | 8.4 | 52 | 29 | 86 |
+| 19,208-coordinate parcel, -2 m | 31 | 13 | 68 | 28 | 79 |
 
 ### Overall
 
@@ -303,16 +311,16 @@ only. Above 1.00 is slower than qdgeo.
 
 | | speed | workloads averaged | excluded as wrong |
 | --- | ---: | ---: | --- |
-| Rust Geo | 0.80x | 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
+| Rust Geo | 0.89x | 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
 | **qdgeo wasm** | **1.00x** | 26 | none |
-| GEOS native | 1.5x | 26 | none |
-| JSTS | 7.1x | 24 | 2 parcel unions |
+| GEOS native | 1.4x | 26 | none |
+| JSTS | 7.7x | 24 | 2 parcel unions |
 | Turf | 17x | 23 | 2 parcel unions, 1 buffer |
-| polyclip-ts | 28x | 10 | 2 parcel unions |
+| polyclip-ts | 26x | 10 | 2 parcel unions |
 
-Across the three runs those means spanned 0.76-0.84, 1.36-1.62, 7.10-8.20,
-14.7-19.3 and 24.3-29.1 respectively. Treat them as one significant figure of
-real information each.
+Across the three runs those means spanned 0.79-0.92, 1.3-1.5, 7.5-8.0, 16-18 and
+25-26 respectively. Treat them as one significant figure of real information
+each.
 
 Timing boundaries are not equal across engines. qdgeo and Rust Geo are the only
 matched pair: both WASM, same Node process, same flat ABI. GEOS is native and
@@ -373,10 +381,12 @@ library has already declined.
 
 - It is an error, never a wrong answer. qdgeo does not return geometry it could
   not verify.
-- It is reported as ABI status `5`, the same code as malformed input. A host
-  that wants to tell the two apart has to check its input separately for now.
-  The native Zig API is more specific: `error.UnnodableCrossing` rather than
-  `error.NodingFailure`.
+- It has its own code: ABI status `7`, distinct from status `5`'s malformed
+  input, so a host can tell "fix your geometry" from "this arrangement cannot
+  be represented" without checking anything itself. The binding throws a
+  `QdgeoError` whose `code` is `'UNREPRESENTABLE'` rather than
+  `'INVALID_GEOMETRY'`, and the Zig API says `error.UnnodableCrossing` rather
+  than `error.NodingFailure`.
 - Retrying the identical call will fail identically. It is deterministic.
 - Nudging the input helps, because the failure depends on one pair of nearly
   coincident vertices: simplifying with a tolerance a few orders of magnitude
@@ -515,11 +525,19 @@ Single-threaded and non-reentrant:
 
 Status: 0 success, 1 allocation error where recoverable, 2 unsupported geometry,
 3 count/point limit, 4 precision/range error, 5 malformed geometry or overlay
-failure, 6 invalid options.
+failure, 6 invalid options, 7 valid input whose arrangement `f64` cannot
+represent.
 
-Status `5` covers both "this geometry is malformed" and "this arrangement is not
-representable in `f64`" — see [When valid input fails](#when-valid-input-fails),
-which is rare but happens to input that is entirely valid.
+Status `5` means the input was bad; status `7` means the input was valid and
+the answer still could not be built — see
+[When valid input fails](#when-valid-input-fails), which is rare but real. The
+two want different responses, which is why they are different codes.
+
+The numbers are the ABI's; a JavaScript caller never sees them. The binding
+throws `QdgeoError`, whose `code` is a name — `'INVALID_GEOMETRY'`,
+`'UNREPRESENTABLE'`, `'OUT_OF_MEMORY'` and so on — so a branch reads at the
+call site, and the exported `STATUS` map translates for a host driving the raw
+exports.
 
 ### WKB, native only
 
@@ -651,7 +669,8 @@ Two workflows in [`.github/workflows/`](.github/workflows/).
 **`ci.yml`** runs on every push and pull request: the Zig tests in Debug and
 ReleaseSafe, all four build targets, `npm test` — the WASM runtime checks, the
 binding, both adapters and the JTS Topology Suite — the examples build, the
-generated declaration types, the package manifest, Prettier and `zig fmt`. It
+generated declaration types and API reference, the package manifest, Prettier
+and `zig fmt`. It
 needs Zig and Node and nothing else, and it prints the artifact size to the run
 summary, so a change that inflates the download is visible in the pull request.
 
@@ -661,8 +680,9 @@ regression and an unexpected fix both name the case rather than moving a
 number.
 
 **`pages.yml`** rebuilds the WASM module, assembles `examples/` into a site with
-the fresh module, checks every page is present, and deploys to GitHub Pages.
-Enable it once under **Settings → Pages → Source → GitHub Actions**.
+the fresh module, generates the API reference into `/api/`, checks every page is
+present, and deploys to GitHub Pages. Enable it once under
+**Settings → Pages → Source → GitHub Actions**.
 
 The differential comparison suite is not in CI. It needs GEOS, the parcel
 dataset and several npm engines — and optionally a Rust toolchain for the

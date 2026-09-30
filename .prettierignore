@@ -6,3 +6,6 @@ examples/dist/
 # Data, not source: committed reduced-failure fixtures and generated reports.
 tests/compare/generated/
 tests/compare/fixtures/
+
+# Generated API reference.
+docs/api/

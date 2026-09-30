@@ -652,3 +652,14 @@ test "a self-crossing closed line buffers once the arrangement is noded again" {
     try std.testing.expectEqual(@as(usize, 3), out.polygons[0].rings.len);
     try std.testing.expectApproxEqAbs(4.2689251551415985, area(out.polygons), 1e-9);
 }
+
+test "the ABI separates a precision limit from malformed input" {
+    // Status 7 is the one case where valid input fails — an arrangement f64
+    // cannot hold — and a host must be able to tell it from status 5, which
+    // means the input itself was bad. The split is a compatibility promise;
+    // this pins it.
+    const abi = @import("abi.zig");
+    try std.testing.expectEqual(@as(u32, 7), abi.code(error.UnnodableCrossing));
+    try std.testing.expectEqual(@as(u32, 5), abi.code(error.NodingFailure));
+    try std.testing.expectEqual(@as(u32, 1), abi.code(error.OutOfMemory));
+}

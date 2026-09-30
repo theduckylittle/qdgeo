@@ -4,6 +4,31 @@
   "description": "Quick & Dirty Geographic Library: buffer and boolean geometry for the browser, in Zig.",
   "license": "MIT",
   "author": "Dan \"Ducky\" Little",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theduckylittle/qdgeo.git"
+  },
+  "homepage": "https://theduckylittle.github.io/qdgeo/",
+  "bugs": "https://github.com/theduckylittle/qdgeo/issues",
+  "keywords": [
+    "geometry",
+    "gis",
+    "wasm",
+    "buffer",
+    "union",
+    "intersection",
+    "boolean-operations",
+    "polygon",
+    "polygon-clipping",
+    "openlayers",
+    "leaflet",
+    "deck.gl",
+    "maplibre",
+    "zig"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "sideEffects": false,
   "types": "./types/qdgeo.d.ts",
@@ -33,6 +58,7 @@
     "js/",
     "types/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE.txt"
   ],
   "scripts": {
@@ -48,6 +74,7 @@
     "format": "prettier --write \"**/*.{js,jsx,mjs,html}\"",
     "format:check": "prettier --check \"**/*.{js,jsx,mjs,html}\"",
     "types": "node -e \"require('node:fs').rmSync('types',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "docs": "typedoc",
     "prepack": "zig build wasm && npm run types"
   },
   "devDependencies": {
@@ -57,6 +84,7 @@
     "jsts": "^2.12.1",
     "polyclip-ts": "0.16.8",
     "prettier": "3.9.6",
+    "typedoc": "0.28.20",
     "typescript": "^5.9.0",
     "vitest": "^5.0.1"
   }

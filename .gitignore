@@ -4,6 +4,8 @@ zig-out/
 js/qdgeo.wasm
 # Generated from the JSDoc by `npm run types`.
 types/
+# Generated from the JSDoc by `npm run docs`.
+docs/api/
 .venv/
 node_modules/
 __pycache__/
