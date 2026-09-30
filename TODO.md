@@ -628,13 +628,14 @@ its own section rather than in a footnote. The label came off because that
 limitation is understood, measured, bounded and documented — not because it went
 away.
 
-Still open, and neither blocks the label:
+Still open, and it does not block the label:
 
 - **Calibrate the limits.** `max_work`, `max_nodes` and `max_output_points` are
   round numbers rather than figures derived from the envelope. They are enforced
   and conservative, so this is precision, not safety.
-- **A distinct ABI status for `UnnodableCrossing`.** It shares `5` with
-  malformed input; the Zig API already distinguishes them.
+- ~~**A distinct ABI status for `UnnodableCrossing`.**~~ Done for 1.0: it is
+  status `7`, the split is pinned by a native test, and the binding throws a
+  `QdgeoError` carrying the code.
 
 ### 1. The public API has to stop changing
 
@@ -803,11 +804,12 @@ what rate, and what a caller should do about it.
       rather than buried in the rejection policy, with the measured rate, the
       cause, and what a caller can do. The invalid-input table now points at it,
       and the ABI status list says `5` covers both meanings.
-- [ ] **Give it a distinct ABI status.** Documented for now, not fixed: a host
-      still cannot tell "your geometry is broken" from "this arrangement is not
-      representable in f64" without checking its own input, and those want
-      different responses. The Zig API already distinguishes them
-      (`error.UnnodableCrossing`); the flat ABI does not.
+- [x] **Give it a distinct ABI status.** Done ahead of 1.0: `UnnodableCrossing`
+      maps to status `7`, everything else malformed stays `5`, and a native test
+      pins the mapping. The binding throws `QdgeoError`, whose `code` is a name
+      — `'UNREPRESENTABLE'` against `'INVALID_GEOMETRY'` — so a JavaScript host
+      branches on a readable constant rather than a magic number or message
+      text. The README's status list and "When valid input fails" both say so.
 
 ### 5. The buffer produces unclosed boundaries on ~0.6% of valid input
 
@@ -1291,9 +1293,10 @@ segments. `divide` refuses it and is right to: putting a vertex there would move
 the crossing off the other segment's line. No iteration count reaches it.
 
 `Engine.lost` counts these during the sweep, and `execute` now raises
-`error.UnnodableCrossing` rather than `NodingFailure` when any were seen. Both
-map to ABI status 5, so nothing host-visible changed, but the Zig-level error
-now separates a precision limit from a bug.
+`error.UnnodableCrossing` rather than `NodingFailure` when any were seen. The
+ABI now maps it to its own status `7` (it shared `5` until the 1.0 release
+prep), so hosts see the same split the Zig-level error draws: a precision
+limit, not a bug.
 
 Its value as a *predictor* was tested and is not good enough to act on:
 

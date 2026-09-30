@@ -35,7 +35,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: examples/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            examples/package-lock.json
 
       - name: Build the site
         run: |
@@ -45,6 +47,14 @@ jobs:
           npm run examples:build
           mv examples/dist site
 
+      - name: Build the API reference
+        run: |
+          # TypeDoc over the same JSDoc the declaration types come from, served
+          # beside the examples at /api/.
+          npm ci
+          npm run docs
+          mv docs/api site/api
+
       - name: Check the pages the site will serve
         run: |
           for page in index canvas openlayers maplibre leaflet deckgl; do
@@ -52,6 +62,7 @@ jobs:
           done
           ls site/assets/*.wasm >/dev/null || {
             echo "the WASM module was not emitted as an asset"; exit 1; }
+          test -s site/api/index.html || { echo "missing the API reference"; exit 1; }
           echo "site is complete"
 
       - uses: actions/configure-pages@v5

@@ -1,6 +1,7 @@
 # tests/CLAUDE.md
 
-Context for the test suites. The root `CLAUDE.md` covers the library and
+Context for the test suites. The root `CLAUDE.md` covers the project,
+`src/CLAUDE.md` covers the library internals, and
 [`TESTING.md`](../TESTING.md) covers how to run things; this file covers the
 handful of decisions that are easy to get wrong from inside `tests/`.
 

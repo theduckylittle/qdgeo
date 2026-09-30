@@ -83,6 +83,12 @@ jobs:
           npm run types
           test -s types/qdgeo.d.ts
 
+      - name: API reference
+        run: |
+          # Generated from the same JSDoc; fails when a doc comment breaks.
+          npm run docs
+          test -s docs/api/index.html
+
       - name: Package manifest
         run: |
           # Every file the `exports` map promises has to be in the tarball.

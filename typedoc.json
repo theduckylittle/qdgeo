@@ -1,0 +1,17 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "qdgeo",
+  "entryPoints": ["js/qdgeo.js", "js/deck.js", "js/leaflet.js"],
+  "out": "docs/api",
+  "readme": "README.md",
+  "includeVersion": true,
+  "highlightLanguages": ["javascript", "typescript", "shellscript", "zig", "html"],
+  "excludePrivate": true,
+  "disableGit": true,
+  "sourceLinkTemplate": "https://github.com/theduckylittle/qdgeo/blob/main/{path}#L{line}",
+  "navigationLinks": {
+    "Examples": "https://theduckylittle.github.io/qdgeo/",
+    "GitHub": "https://github.com/theduckylittle/qdgeo"
+  },
+  "hostedBaseUrl": "https://theduckylittle.github.io/qdgeo/api/"
+}

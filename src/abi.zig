@@ -36,12 +36,22 @@ pub fn status(err: anyerror) u32 {
         std.debug.print("operation error: {s}\n", .{@errorName(err)});
         if (@errorReturnTrace()) |trace| std.debug.dumpErrorReturnTrace(trace);
     }
+    return code(err);
+}
+
+/// The status a host sees. 5 means the input was bad; 7 means the input was
+/// valid and the answer still could not be built — a crossing whose rounded
+/// intersection lands on or past a segment endpoint, so no f64 vertex can
+/// represent it. The two want different responses from a caller, which is why
+/// they are different codes.
+pub fn code(err: anyerror) u32 {
     return switch (err) {
         error.OutOfMemory => 1,
         error.UnsupportedGeometry => 2,
         error.LimitExceeded => 3,
         error.PrecisionLoss, error.CoordinateRange => 4,
         error.InvalidOptions => 6,
+        error.UnnodableCrossing => 7,
         else => 5,
     };
 }
