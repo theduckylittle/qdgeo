@@ -6,7 +6,7 @@ Notable changes to qdgeo, newest first. The format follows
 the binding's API and the package's entry points only change with a major
 version.
 
-## 1.0.0 — unreleased
+## 1.0.0 — 2026-10-01
 
 First release.
 
