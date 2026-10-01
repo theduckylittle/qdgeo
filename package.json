@@ -1,6 +1,6 @@
 {
   "name": "qdgeo",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Quick & Dirty Geographic Library: buffer and boolean geometry for the browser, in Zig.",
   "license": "MIT",
   "author": "Dan \"Ducky\" Little",
