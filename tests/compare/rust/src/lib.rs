@@ -117,3 +117,57 @@ pub extern "C" fn rg_execute(op: u32, subject: usize, distance: f64, steps: f64)
     write(&result);
     0
 }
+
+/// The predicates, behind the `predicates` feature so the union-and-buffer
+/// artifact is unchanged. `subject` leading polygons are the first operand;
+/// the rest are the second, unless coordinates follow the last ring, in which
+/// case those are bare points and the second operand is their MultiPoint.
+///
+/// 0 intersects, 1 contains, 2 touches, 3 the DE-9IM matrix packed two bits a
+/// cell in JTS's order, 0 empty or the dimension plus one — qdgeo's packing.
+#[cfg(feature = "predicates")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rg_predicate(op: u32, subject: usize) -> i32 {
+    use geo::algorithm::{coordinate_position::CoordPos, dimensions::Dimensions};
+    use geo::{Contains, Intersects, MultiPoint, Point, Relate};
+    let polygons = read();
+    let split = subject.min(polygons.len());
+    let a = MultiPolygon::new(polygons[..split].to_vec());
+    let used = ring_ends().last().copied().unwrap_or(0) as usize;
+    let c = coords();
+    let points: Vec<Point<f64>> = (used..c.len() / 2).map(|i| Point::new(c[2 * i], c[2 * i + 1])).collect();
+    let answer = |m: geo::relate::IntersectionMatrix| -> i32 {
+        let order = [CoordPos::Inside, CoordPos::OnBoundary, CoordPos::Outside];
+        let mut bits = 0i32;
+        for (r, row) in order.iter().enumerate() {
+            for (k, column) in order.iter().enumerate() {
+                let cell = match m.get(*row, *column) {
+                    Dimensions::Empty => 0,
+                    Dimensions::ZeroDimensional => 1,
+                    Dimensions::OneDimensional => 2,
+                    Dimensions::TwoDimensional => 3,
+                };
+                bits |= cell << (2 * (3 * r + k));
+            }
+        }
+        bits
+    };
+    if !points.is_empty() {
+        let b = MultiPoint::new(points);
+        return match op {
+            0 => a.intersects(&b) as i32,
+            1 => a.contains(&b) as i32,
+            2 => a.relate(&b).is_touches() as i32,
+            3 => answer(a.relate(&b)),
+            _ => -6,
+        };
+    }
+    let b = MultiPolygon::new(polygons[split..].to_vec());
+    match op {
+        0 => a.intersects(&b) as i32,
+        1 => a.contains(&b) as i32,
+        2 => a.relate(&b).is_touches() as i32,
+        3 => answer(a.relate(&b)),
+        _ => -6,
+    }
+}

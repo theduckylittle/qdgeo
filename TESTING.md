@@ -99,8 +99,10 @@ matters:
   `test.fails`, so an unexpected pass gets reported too.
 
 Current state: **155 passing, 3 expected failures, 15 skipped**, out of 173
-assertions. Never edit a case to make it pass. If a case is out of scope, give
-it a `test.skip` with a reason.
+overlay and buffer assertions, and **330 passing, 0 failures, 44 skipped** out
+of 374 predicate assertions — the skips all one `MULTIPOINT(EMPTY, …)` shape
+JSTS's reader refuses. Never edit a case to make it pass. If a case is out of
+scope, give it a `test.skip` with a reason.
 
 ### The adapter tests
 

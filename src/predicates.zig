@@ -135,6 +135,12 @@ pub fn area(ring: []const g.Coordinate) f128 {
     return sum / 2;
 }
 
+/// Whether `p` lies on the segment `a`-`b`: exactly on its line, and inside
+/// its box, which on the line means between its ends.
+pub fn onSegment(a: g.Coordinate, b: g.Coordinate, p: g.Coordinate) bool {
+    return g.Extent.of(a, b).has(p) and orient(a, b, p) == 0;
+}
+
 /// Proper intersection: wide intermediates avoid cancellation in nearly parallel
 /// segment parameter calculations. Endpoint/collinear cases are handled by noding.
 pub fn intersection(a: g.Coordinate, b: g.Coordinate, c: g.Coordinate, d: g.Coordinate) g.Coordinate {

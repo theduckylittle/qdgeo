@@ -36,7 +36,7 @@ import GeoJSONReader from 'jsts/org/locationtech/jts/io/GeoJSONReader.js';
 import DiscreteHausdorffDistance from 'jsts/org/locationtech/jts/algorithm/distance/DiscreteHausdorffDistance.js';
 
 import { load, OP } from '../../js/qdgeo.js';
-import { caseFiles } from './cases.mjs';
+import { caseFiles, isPredicateFile } from './cases.mjs';
 
 // JTS BufferResultMatcher, verbatim.
 const MIN_DISTANCE_TOLERANCE = 1.0e-8;
@@ -136,7 +136,7 @@ function overlayMismatch(actual, expected) {
   return `not topologically equal (symdiff area ${actual.symDifference(expected).getArea().toExponential(3)})`;
 }
 
-for (const { name, cases } of caseFiles()) {
+for (const { name, cases } of caseFiles((name) => !isPredicateFile(name))) {
   describe(name, () => {
     for (const source of cases) {
       describe(source.desc, () => {

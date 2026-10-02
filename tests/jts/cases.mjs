@@ -36,9 +36,16 @@ export function parseCases(xml) {
   return cases;
 }
 
-/** Every case file under `cases/`, in a stable order. */
-export const caseFiles = () =>
+/**
+ * Every case file under `cases/` whose name `keep` accepts, in a stable
+ * order. The overlay and buffer files and the predicate files are run by
+ * different suites, since one compares geometry and the other booleans.
+ */
+export const caseFiles = (keep = () => true) =>
   readdirSync(CASES)
-    .filter((name) => name.endsWith('.xml'))
+    .filter((name) => name.endsWith('.xml') && keep(name))
     .sort()
     .map((name) => ({ name, cases: parseCases(readFileSync(new URL(name, CASES), 'utf8')) }));
+
+/** The predicate suites: JTS's relate cases and its prepared-geometry cases. */
+export const isPredicateFile = (name) => /Relate|Predicate/.test(name);

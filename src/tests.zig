@@ -663,3 +663,269 @@ test "the ABI separates a precision limit from malformed input" {
     try std.testing.expectEqual(@as(u32, 5), abi.code(error.NodingFailure));
     try std.testing.expectEqual(@as(u32, 1), abi.code(error.OutOfMemory));
 }
+
+/// Polygon storage a `Collection` can borrow for the length of a test. A ring
+/// slice handed to a struct literal in an argument list only lives for that
+/// call, so the rings and polygons are held here instead.
+const Shapes = struct {
+    rings: [3]geo.LinearRing = undefined,
+    polygons: [2]geo.Polygon = undefined,
+    count: usize = 0,
+
+    fn one(self: *Shapes, shell: []const geo.Coordinate) geo.Collection {
+        self.rings[0] = shell;
+        self.polygons[0] = .{ .rings = self.rings[0..1] };
+        self.count = 1;
+        return self.collection();
+    }
+    fn donut(self: *Shapes, shell: []const geo.Coordinate, hole: []const geo.Coordinate) geo.Collection {
+        self.rings[0] = shell;
+        self.rings[1] = hole;
+        self.polygons[0] = .{ .rings = self.rings[0..2] };
+        self.count = 1;
+        return self.collection();
+    }
+    fn two(self: *Shapes, first: []const geo.Coordinate, second: []const geo.Coordinate) geo.Collection {
+        self.rings[0] = first;
+        self.rings[1] = second;
+        self.polygons[0] = .{ .rings = self.rings[0..1] };
+        self.polygons[1] = .{ .rings = self.rings[1..2] };
+        self.count = 2;
+        return self.collection();
+    }
+    fn collection(self: *const Shapes) geo.Collection {
+        return .{ .polygons = self.polygons[0..self.count] };
+    }
+};
+
+test "relate: the matrix for the textbook polygon cases, in JTS's order" {
+    const unit = rect(0, 0, 10, 10);
+    const inner = rect(2, 2, 8, 8);
+    const beside = rect(10, 0, 20, 10);
+    const corner = rect(10, 10, 20, 20);
+    const far = rect(30, 30, 40, 40);
+    const overlap = rect(5, 5, 15, 15);
+    var reversed = unit;
+    std.mem.reverse(geo.Coordinate, &reversed);
+    const cases = [_]struct { b: []const geo.Coordinate, expect: []const u8 }{
+        .{ .b = &far, .expect = "FF2FF1212" },
+        .{ .b = &beside, .expect = "FF2F11212" },
+        .{ .b = &corner, .expect = "FF2F01212" },
+        .{ .b = &overlap, .expect = "212101212" },
+        .{ .b = &inner, .expect = "212FF1FF2" },
+        .{ .b = &reversed, .expect = "2FFF1FFF2" },
+        .{ .b = &unit, .expect = "2FFF1FFF2" },
+    };
+    var first: Shapes = .{};
+    var second: Shapes = .{};
+    const square = first.one(&unit);
+    for (cases) |case| {
+        const other = second.one(case.b);
+        const m = try geo.relate(a, square, other, .{});
+        try std.testing.expectEqualStrings(case.expect, &m.string());
+        try std.testing.expect(try m.matches(case.expect));
+        // The matrix and the early-exit path must agree.
+        try std.testing.expectEqual(m.evaluate(.intersects), try geo.intersects(a, square, other, .{}));
+    }
+}
+
+test "relate: lines and points against a polygon, and the named predicates" {
+    const unit = rect(0, 0, 10, 10);
+    var shapes: Shapes = .{};
+    const square = shapes.one(&unit);
+    const across = [_]geo.Coordinate{ .{ .x = -5, .y = 5 }, .{ .x = 15, .y = 5 } };
+    const inside = [_]geo.Coordinate{ .{ .x = 2, .y = 2 }, .{ .x = 8, .y = 8 } };
+    const along = [_]geo.Coordinate{ .{ .x = 0, .y = 2 }, .{ .x = 0, .y = 8 } };
+    const touching = [_]geo.Coordinate{ .{ .x = -5, .y = 5 }, .{ .x = 0, .y = 5 } };
+    const away = [_]geo.Coordinate{ .{ .x = 20, .y = 20 }, .{ .x = 30, .y = 20 } };
+
+    var m = try geo.relate(a, square, .{ .line_strings = &.{&across} }, .{});
+    try std.testing.expectEqualStrings("1F20F1102", &m.string());
+    try std.testing.expect(m.evaluate(.crosses));
+    try std.testing.expect(!m.evaluate(.contains));
+
+    m = try geo.relate(a, square, .{ .line_strings = &.{&inside} }, .{});
+    try std.testing.expectEqualStrings("102FF1FF2", &m.string());
+    try std.testing.expect(m.evaluate(.contains));
+    try std.testing.expect(m.evaluate(.covers));
+
+    // A line along the boundary is covered but not contained: no interior
+    // point. Its ends are boundary points sitting on the boundary.
+    m = try geo.relate(a, square, .{ .line_strings = &.{&along} }, .{});
+    try std.testing.expectEqualStrings("FF2101FF2", &m.string());
+    try std.testing.expect(m.evaluate(.covers));
+    try std.testing.expect(!m.evaluate(.contains));
+    try std.testing.expect(m.evaluate(.touches));
+
+    m = try geo.relate(a, square, .{ .line_strings = &.{&touching} }, .{});
+    try std.testing.expectEqualStrings("FF2F01102", &m.string());
+    try std.testing.expect(m.evaluate(.touches));
+    try std.testing.expect(!m.evaluate(.crosses));
+
+    m = try geo.relate(a, square, .{ .line_strings = &.{&away} }, .{});
+    try std.testing.expectEqualStrings("FF2FF1102", &m.string());
+    try std.testing.expect(m.evaluate(.disjoint));
+
+    const centre: geo.Coordinate = .{ .x = 5, .y = 5 };
+    const edge: geo.Coordinate = .{ .x = 10, .y = 5 };
+    const vertex: geo.Coordinate = .{ .x = 10, .y = 10 };
+    const outside: geo.Coordinate = .{ .x = 11, .y = 5 };
+    try std.testing.expectEqualStrings("0F2FF1FF2", &(try geo.relate(a, square, .{ .points = &.{centre} }, .{})).string());
+    try std.testing.expectEqualStrings("FF20F1FF2", &(try geo.relate(a, square, .{ .points = &.{edge} }, .{})).string());
+    try std.testing.expectEqualStrings("FF20F1FF2", &(try geo.relate(a, square, .{ .points = &.{vertex} }, .{})).string());
+    try std.testing.expectEqualStrings("FF2FF10F2", &(try geo.relate(a, square, .{ .points = &.{outside} }, .{})).string());
+    try std.testing.expect(try geo.intersects(a, square, .{ .points = &.{edge} }, .{}));
+    try std.testing.expect(!try geo.intersects(a, square, .{ .points = &.{outside} }, .{}));
+    try std.testing.expect(try geo.predicate(a, square, .{ .points = &.{centre} }, .contains, .{}));
+    try std.testing.expect(!try geo.predicate(a, square, .{ .points = &.{edge} }, .contains, .{}));
+    try std.testing.expect(try geo.predicate(a, square, .{ .points = &.{edge} }, .covers, .{}));
+
+    // Point against point, and against a line's interior and its end.
+    try std.testing.expectEqualStrings("0FFFFFFF2", &(try geo.relate(a, .{ .points = &.{centre} }, .{ .points = &.{centre} }, .{})).string());
+    try std.testing.expectEqualStrings("FF0FFF0F2", &(try geo.relate(a, .{ .points = &.{centre} }, .{ .points = &.{edge} }, .{})).string());
+    try std.testing.expectEqualStrings("0FFFFF102", &(try geo.relate(a, .{ .points = &.{centre} }, .{ .line_strings = &.{&inside} }, .{})).string());
+    try std.testing.expectEqualStrings("F0FFFF102", &(try geo.relate(a, .{ .points = &.{.{ .x = 2, .y = 2 }} }, .{ .line_strings = &.{&inside} }, .{})).string());
+}
+
+test "relate: a collection is read as a union" {
+    // Two squares sharing an edge: a line along that edge is inside the pair,
+    // and the pair as one operand covers a square spanning both.
+    const left = rect(0, 0, 10, 10);
+    const right = rect(10, 0, 20, 10);
+    var shapes: Shapes = .{};
+    var other: Shapes = .{};
+    const pair = shapes.two(&left, &right);
+    const seam = [_]geo.Coordinate{ .{ .x = 10, .y = 2 }, .{ .x = 10, .y = 8 } };
+    var m = try geo.relate(a, pair, .{ .line_strings = &.{&seam} }, .{});
+    try std.testing.expectEqualStrings("102FF1FF2", &m.string());
+    try std.testing.expect(m.evaluate(.contains));
+    const spanning = rect(5, 2, 15, 8);
+    m = try geo.relate(a, pair, other.one(&spanning), .{});
+    try std.testing.expectEqualStrings("212FF1FF2", &m.string());
+    try std.testing.expect(m.evaluate(.contains));
+    // The seam vertex (10, 10) is interior to neither alone but boundary of the union.
+    try std.testing.expectEqualStrings("FF20F1FF2", &(try geo.relate(a, pair, .{ .points = &.{.{ .x = 10, .y = 10 }} }, .{})).string());
+    try std.testing.expectEqualStrings("0F2FF1FF2", &(try geo.relate(a, pair, .{ .points = &.{.{ .x = 10, .y = 5 }} }, .{})).string());
+
+    // Two lines meeting end to end have no boundary at the meeting point.
+    const one = [_]geo.Coordinate{ .{ .x = 0, .y = 0 }, .{ .x = 5, .y = 0 } };
+    const two = [_]geo.Coordinate{ .{ .x = 5, .y = 0 }, .{ .x = 10, .y = 0 } };
+    const chain: geo.Collection = .{ .line_strings = &.{ &one, &two } };
+    try std.testing.expectEqualStrings("0FFFFF102", &(try geo.relate(a, .{ .points = &.{.{ .x = 5, .y = 0 }} }, chain, .{})).string());
+    try std.testing.expectEqualStrings("F0FFFF102", &(try geo.relate(a, .{ .points = &.{.{ .x = 0, .y = 0 }} }, chain, .{})).string());
+
+    // A hole: the point in it is outside, the island in it touches nothing.
+    const shell = rect(0, 0, 10, 10);
+    const hole = rect(3, 3, 7, 7);
+    const donut = shapes.donut(&shell, &hole);
+    try std.testing.expect(!try geo.intersects(a, donut, .{ .points = &.{.{ .x = 5, .y = 5 }} }, .{}));
+    const island = rect(4, 4, 6, 6);
+    try std.testing.expectEqualStrings("FF2FF1212", &(try geo.relate(a, donut, other.one(&island), .{})).string());
+    try std.testing.expect(!try geo.intersects(a, donut, other.one(&island), .{}));
+    // Filling the hole exactly: touches along the hole's ring, which is
+    // the whole of the filler's boundary.
+    try std.testing.expectEqualStrings("FF2F112F2", &(try geo.relate(a, donut, other.one(&hole), .{})).string());
+}
+
+test "relate: empty operands, invalid input and the ABI entry point" {
+    const unit = rect(0, 0, 10, 10);
+    var shapes: Shapes = .{};
+    var other: Shapes = .{};
+    const square = shapes.one(&unit);
+    try std.testing.expectEqualStrings("FF2FF1FF2", &(try geo.relate(a, square, .{}, .{})).string());
+    try std.testing.expect(!try geo.intersects(a, square, .{}, .{}));
+    try std.testing.expect(!try geo.intersects(a, .{}, .{}, .{}));
+    const flat_ring = [_]geo.Coordinate{ .{ .x = 0, .y = 0 }, .{ .x = 5, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 0, .y = 0 } };
+    try std.testing.expectError(error.InvalidTopology, geo.intersects(a, square, other.one(&flat_ring), .{}));
+    const dot = [_]geo.Coordinate{ .{ .x = 1, .y = 1 }, .{ .x = 1, .y = 1 } };
+    try std.testing.expectError(error.InvalidGeometry, geo.relate(a, square, .{ .line_strings = &.{&dot} }, .{}));
+    try std.testing.expectError(error.InvalidOptions, (try geo.relate(a, square, square, .{})).matches("T*F"));
+
+    // The packed matrix the ABI hands a host, and the named codes.
+    const overlap = rect(5, 5, 15, 15);
+    const m = try geo.relate(a, square, other.one(&overlap), .{});
+    var unpacked: [9]u8 = undefined;
+    for (&unpacked, 0..) |*c, i| c.* = "F012"[(m.bits() >> @intCast(2 * i)) & 3];
+    try std.testing.expectEqualStrings("212101212", &unpacked);
+}
+
+test "relate: a probe far outside the other operand's polygon grid" {
+    // The grid covers polygon boxes only. A line stretches the first
+    // operand's extent across the second, so the second's pieces are probed
+    // far outside the grid; converting that cell index before clamping it
+    // overflowed `u32` and trapped. GEOS 3.13 gives 102FF1212 here. JSTS
+    // gives 212101212, which cannot be right — only the line reaches B.
+    const unit = rect(0, 0, 1, 1);
+    const line = [_]geo.Coordinate{ .{ .x = 0, .y = 0 }, .{ .x = 1e12, .y = 0 } };
+    const far = rect(5e11, -1, 5e11 + 1, 1);
+    var shapes: Shapes = .{};
+    var other: Shapes = .{};
+    const first: geo.Collection = .{ .polygons = shapes.one(&unit).polygons, .line_strings = &.{&line} };
+    try std.testing.expectEqualStrings("102FF1212", &(try geo.relate(a, first, other.one(&far), .{})).string());
+}
+
+test "relate: a polygon with no rings does not make its operand areal" {
+    // `POLYGON EMPTY` beside a line is a line. The named predicates pick
+    // their pattern from the operands' dimensions; reading them off the raw
+    // input counted the empty polygon, picked `crosses`' area-against-area
+    // rule — always false — and missed a line crossing the square. GEOS
+    // 3.13 says true, and its matrix is the one below.
+    const unit = rect(0, 0, 10, 10);
+    const across = [_]geo.Coordinate{ .{ .x = -5, .y = 5 }, .{ .x = 15, .y = 5 } };
+    var shapes: Shapes = .{};
+    const first: geo.Collection = .{ .polygons = &.{.{ .rings = &.{} }}, .line_strings = &.{&across} };
+    const square = shapes.one(&unit);
+    try std.testing.expect(try geo.predicate(a, first, square, .crosses, .{}));
+    try std.testing.expectEqualStrings("101FF0212", &(try geo.relate(a, first, square, .{})).string());
+}
+
+test "relate: patterns decide lazily, and disjoint extents decide from dimensions" {
+    const unit = rect(0, 0, 10, 10);
+    const overlap = rect(5, 5, 15, 15);
+    const far = rect(30, 30, 40, 40);
+    var shapes: Shapes = .{};
+    var other: Shapes = .{};
+    const square = shapes.one(&unit);
+
+    // The pattern language, in and out of its packed form.
+    const p = try geo.Pattern.parse("AA*AA*FF*");
+    try std.testing.expectEqual(p.codes, (try geo.Pattern.fromBits(p.bits())).codes);
+    try std.testing.expectEqual(@as(u32, 0), (try geo.Pattern.parse("*********")).bits());
+    try std.testing.expectError(error.InvalidOptions, geo.Pattern.parse("T*X******"));
+    try std.testing.expectError(error.InvalidOptions, geo.Pattern.fromBits(7));
+    try std.testing.expectError(error.InvalidOptions, geo.Pattern.fromBits(1 << 27));
+
+    // `check` on a matrix still growing: an F that filled is failed for good,
+    // a filled T is matched once nothing else waits, and an F that holds is
+    // not yet anything.
+    var m: geo.Matrix = .{ .dims = .{ 2, 2 } };
+    try std.testing.expectEqual(geo.Pattern.Verdict.undecided, (try geo.Pattern.parse("T*****FF*")).verdict(m, false));
+    m.cells[0][0] = .area;
+    try std.testing.expectEqual(geo.Pattern.Verdict.matched, (try geo.Pattern.parse("T********")).verdict(m, false));
+    try std.testing.expectEqual(geo.Pattern.Verdict.undecided, (try geo.Pattern.parse("T*****FF*")).verdict(m, false));
+    m.cells[2][0] = .area;
+    try std.testing.expectEqual(geo.Pattern.Verdict.failed, (try geo.Pattern.parse("T*****FF*")).verdict(m, false));
+    try std.testing.expectEqual(geo.Pattern.Verdict.failed, (try geo.Pattern.parse("1********")).verdict(m, false));
+    try std.testing.expectEqual(geo.Pattern.Verdict.matched, (try geo.Pattern.parse("2********")).verdict(m, false));
+
+    // The lazy answer agrees with the full matrix on every named predicate.
+    for ([_][]const geo.Coordinate{ &overlap, &far, &unit }) |ring| {
+        const second = other.one(ring);
+        const full = try geo.relate(a, square, second, .{});
+        inline for (std.meta.fields(geo.Predicate)) |field| {
+            const predicate: geo.Predicate = @enumFromInt(field.value);
+            try std.testing.expectEqual(full.evaluate(predicate), try geo.predicate(a, square, second, predicate, .{}));
+        }
+        try std.testing.expectEqual(try full.matches("T*T***T**"), try geo.matches(a, square, second, "T*T***T**", .{}));
+    }
+    // Disjoint extents: polygons settle every cell; lines leave their
+    // boundary cell open, and a pattern that asks about it still gets the
+    // right answer by the long way round.
+    const line = [_]geo.Coordinate{ .{ .x = 30, .y = 30 }, .{ .x = 40, .y = 40 } };
+    const ring = [_]geo.Coordinate{ .{ .x = 30, .y = 30 }, .{ .x = 40, .y = 30 }, .{ .x = 40, .y = 40 }, .{ .x = 30, .y = 30 } };
+    try std.testing.expect(try geo.matches(a, square, .{ .line_strings = &.{&line} }, "FF2FF1102", .{}));
+    try std.testing.expect(try geo.matches(a, square, .{ .line_strings = &.{&ring} }, "FF2FF11F2", .{}));
+    try std.testing.expect(try geo.predicate(a, square, .{ .line_strings = &.{&line} }, .disjoint, .{}));
+    try std.testing.expect(!try geo.predicate(a, square, .{ .points = &.{.{ .x = 5, .y = 5 }} }, .touches, .{}));
+    try std.testing.expect(!try geo.predicate(a, .{ .points = &.{.{ .x = 5, .y = 5 }} }, .{ .points = &.{.{ .x = 5, .y = 5 }} }, .touches, .{}));
+}

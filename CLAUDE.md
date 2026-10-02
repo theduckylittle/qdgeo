@@ -14,7 +14,8 @@ everywhere; the deep context lives next to the code it describes:
 
 **qdgeo** — "Quick & Dirty Geographic Library". A narrow, allocator-explicit 2D
 geometry library in **Zig 0.16.0**: the four boolean operations and rounded
-signed buffer, over one degenerate-tolerant planar overlay. The deployment target
+signed buffer, over one degenerate-tolerant planar overlay, and the DE-9IM
+predicates over the same exact arithmetic. The deployment target
 is **WASM**; the native shared library exists so the differential harness can
 call it, and so a Python module has something to link. It ships to npm as an
 ESM package — the binding `js/qdgeo.js`, two host adapters, the WASM artifact
@@ -25,10 +26,11 @@ Four goals, in the order they break ties:
 1. **Speed** — WASM and vector operations, meaningfully faster than Turf.
 2. **Small size** — Zig for its minimal, pay-for-what-you-use standard library
    and its C-compatible output. The shipped WASM is **`ReleaseSafe`**, not
-   `ReleaseFast`, and that is measured rather than assumed: `ReleaseFast` is
-   1.11x faster, **15 KB larger**, and produces bit-identical geometry on all 26
-   workloads. It loses on goal 2 as well as goal 4. Build it with
-   `-Dwasm-optimize=ReleaseFast` to re-measure; do not ship it.
+   `ReleaseFast`, for its runtime safety checks — goal 4. That is a decision
+   about safety, not size: measured with the predicates in, `ReleaseFast` is
+   1.09x faster, 2.9 KB smaller raw and 4.5 KB smaller gzipped, and produces
+   bit-identical geometry on all 26 workloads. Build it with
+   `-Dwasm-optimize=ReleaseFast` to re-measure.
 3. **Tight scope** — buffer and booleans are nearly all of web GIS geometry.
    New functionality is scrutinised hard; see the one-representation and
    browser-surface rules in `src/CLAUDE.md`.
@@ -81,7 +83,7 @@ zig build wasm                             # freestanding, import-free, stripped
 
 # Correctness. Zig + Node, nothing else, about two seconds.
 npm run check                              # zig build test x2, then every JS suite
-zig build test                             # 30 native tests
+zig build test                             # 34 native tests
 zig build test -Doptimize=ReleaseSafe
 npm test                                   # vitest: ABI, binding, adapters, JTS
 npm test -- tests/jts                      # one file or directory
@@ -118,6 +120,7 @@ setup (venv, `npm ci`, the optional `cargo build --release`) is in
 | `src/predicates.zig` | Adaptive `orient` / `areaSign`, f128 `area`, segment `intersection` |
 | `src/sweep.zig` | The overlay engine: degenerate-tolerant Martinez-Rueda |
 | `src/operations.zig` | `unionAll`, `buffer*`; input normalization, band generation |
+| `src/relate.zig` | The predicates: `intersects` with its early exits, and the DE-9IM `relate` matrix every other one is read from |
 | `src/abi.zig` | The host ABI — the whole browser surface, and the wasm root |
 | `src/abi_wkb.zig` | The WKB ABI, linked into the native library only |
 | `src/native.zig` | Root of the native library: both halves |
@@ -180,9 +183,9 @@ promise, not a tweak.
   `operations.zig` does; `tests/wasm.test.mjs` asserts the import list is empty.
 - **`zig build test` passing does not mean the parcel suite passes**, and
   neither implies the JTS suite. See `TESTING.md` and `tests/CLAUDE.md` — the
-  suites answer different questions. All currently green: 30 native tests, 26 of
-  26 differential workloads native and WASM, and 155 of 158 applicable JTS
-  assertions.
+  suites answer different questions. All currently green: 34 native tests, 26 of
+  26 differential workloads native and WASM, 155 of 158 applicable JTS overlay
+  and buffer assertions, and 330 of 330 JTS predicate assertions.
 - **The boundary metric adjudicates against exact arithmetic** (details in
   `tests/CLAUDE.md`), because GEOS is not a positional oracle on this data — it
   misplaces nearly parallel intersections by up to `1e-4 m` and emits filament

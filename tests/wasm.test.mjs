@@ -207,3 +207,45 @@ describe('inputs the ABI has to refuse rather than trap on', () => {
     w.geom_clear();
   });
 });
+
+describe('the predicates', () => {
+  // Two overlapping squares, the first the subject: three counts split the
+  // block per kind, a pattern goes in three bits per cell, and the matrix
+  // comes back two bits per cell.
+  const unpack = (bits) =>
+    Array.from({ length: 9 }, (_, i) => 'F012'[(bits >> (2 * i)) & 3]).join('');
+  const CODES = { '*': 0, T: 1, F: 2, 0: 3, 1: 4, 2: 5, A: 6 };
+  const encode = (pattern) => [...pattern].reduce((bits, c, i) => bits | (CODES[c] << (3 * i)), 0);
+
+  const relate = (predicate, input, points, lines, polygons) => {
+    const n = input.coordinates.length / 2;
+    const ptr = w.geom_input(n, input.ringEnds.length, input.polygonEnds.length, 0, points);
+    new Float64Array(w.memory.buffer, ptr, input.coordinates.length).set(input.coordinates);
+    const indices = new Uint32Array(
+      w.memory.buffer,
+      ptr + 16 * n,
+      input.ringEnds.length + input.polygonEnds.length,
+    );
+    indices.set(input.ringEnds);
+    indices.set(input.polygonEnds, input.ringEnds.length);
+    return w.geom_relate(predicate, points, lines, polygons);
+  };
+
+  test('pattern 0, nine stars, is the matrix, packed', () => {
+    expect(unpack(relate(0, pair, 0, 0, 1))).toBe('212101212');
+  });
+
+  test('any other pattern answers 0 or 1', () => {
+    expect(relate(encode('AA*AA****'), pair, 0, 0, 1)).toBe(1); // intersects
+    expect(relate(encode('T*T***T**'), pair, 0, 0, 1)).toBe(1); // overlaps
+    expect(relate(encode('T*****FF*'), pair, 0, 0, 1)).toBe(0); // contains
+    expect(relate(encode('AA*AA****'), pair, 0, 0, 2)).toBe(0); // both squares as the subject, nothing to meet
+  });
+
+  test('a bad pattern or bad geometry is a negated status, not a trap', () => {
+    expect(relate(7, pair, 0, 0, 1)).toBe(-6); // 7 is not a cell code
+    expect(relate(1 << 27, pair, 0, 0, 1)).toBe(-6); // beyond nine cells
+    const flat = { coordinates: [0, 0, 5, 0, 10, 0, 0, 0], ringEnds: [4], polygonEnds: [1] };
+    expect(relate(1, flat, 0, 0, 1)).toBe(-5);
+  });
+});
