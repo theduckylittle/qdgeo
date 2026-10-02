@@ -50,13 +50,13 @@ pub const Mode = g.Mode;
 pub const Limits = g.Limits;
 
 /// -0.0 and 0.0 must be one vertex, or the sort key stops being injective.
-fn canonical(p: g.Coordinate) g.Coordinate {
+pub fn canonical(p: g.Coordinate) g.Coordinate {
     return .{ .x = if (p.x == 0) 0 else p.x, .y = if (p.y == 0) 0 else p.y };
 }
 
 /// Order-preserving f64 pair -> u128, so lexicographic (x, y) comparison is a
 /// single integer compare. Both lanes are mapped with one vector operation.
-fn keyOf(p: g.Coordinate) u128 {
+pub fn keyOf(p: g.Coordinate) u128 {
     const V = @Vector(2, u64);
     const bits: V = @bitCast(@Vector(2, f64){ p.x, p.y });
     const top: V = @splat(@as(u64, 1) << 63);
@@ -937,7 +937,7 @@ fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Lab
 ///
 /// On a buffer, whose result keeps nearly every noded segment, this is the
 /// largest phase after the sweep itself, so it is worth the custom context.
-const Vertices = struct {
+pub const Vertices = struct {
     /// `keyOf` already packs two order-preserving f64 patterns, so one fold and
     /// a 64-bit finalizer avalanche it well enough — and cost far less than
     /// `AutoHashMap`'s Wyhash over all sixteen bytes.

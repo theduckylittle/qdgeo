@@ -28,7 +28,7 @@ fn normalize(a: std.mem.Allocator, paths: *std.ArrayList(g.Path), segments: *usi
             // The ring is the upper bound and repeated points only shrink it.
             try points.ensureTotalCapacity(a, ring.len);
             for (ring) |p| {
-                if (!g.within(p, 1e140)) return error.CoordinateRange;
+                if (!g.within(p, g.coordinate_limit)) return error.CoordinateRange;
                 if (points.items.len != 0 and g.equal(points.items[points.items.len - 1], p)) continue;
                 points.appendAssumeCapacity(p);
             }
@@ -74,11 +74,7 @@ pub fn unionAll(a: std.mem.Allocator, polygons: []const g.Polygon, options: Bool
 /// Everything a buffer can be asked to grow. Areal input is unioned first so
 /// overlapping polygons behave as one region; the rest contributes only when the
 /// distance is positive, because a point and a line have no interior to erode.
-pub const BufferInput = struct {
-    polygons: []const g.Polygon = &.{},
-    line_strings: []const g.LineString = &.{},
-    points: []const g.Coordinate = &.{},
-};
+pub const BufferInput = g.Collection;
 
 /// JTS's `isErodedCompletely`. A ring narrower than twice the erosion distance
 /// has no point far enough from its own boundary to survive, and offsetting it
@@ -123,10 +119,25 @@ fn deduplicate(a: std.mem.Allocator, line: g.LineString) !g.LineString {
     return points.items;
 }
 
+/// A line as every operation takes it: validated, inside the coordinate
+/// limit, and with repeated adjacent coordinates dropped. It can come back
+/// shorter than two points — a line of one repeated coordinate — and what
+/// that means is the caller's: buffer has nothing to grow, and a predicate
+/// has invalid input.
+pub fn normalizedLine(a: std.mem.Allocator, raw: g.LineString) !g.LineString {
+    try g.validateLineString(raw);
+    if (!g.allWithin(raw, g.coordinate_limit)) return error.CoordinateRange;
+    // `geometry.zig` documents repeated adjacent coordinates as legal and
+    // common in real WKB, and `normalize` drops them from rings. Lines never
+    // got the same treatment, so a zero-length segment reached `offsetOf` and
+    // came back as `error.PrecisionLoss`.
+    return deduplicate(a, raw);
+}
+
 fn addCurve(a: std.mem.Allocator, paths: *std.ArrayList(g.Path), curve: []const g.Coordinate, count: *usize, limit: usize) !void {
     // A curve too short to enclose anything encloses nothing.
     if (curve.len < 4) return;
-    if (!g.allWithin(curve, 1e140)) return error.CoordinateRange;
+    if (!g.allWithin(curve, g.coordinate_limit)) return error.CoordinateRange;
     if (curve.len - 1 > limit - count.*) return error.LimitExceeded;
     count.* += curve.len - 1;
     // Orientation is the answer, not a detail: an outward shell curve winds
@@ -137,21 +148,27 @@ fn addCurve(a: std.mem.Allocator, paths: *std.ArrayList(g.Path), curve: []const 
 
 /// What the input union pass does apart from the overlay itself. Rings come
 /// back validated, de-duplicated and oriented, in the order they were given,
-/// so ring 0 stays the shell.
-fn normalized(a: std.mem.Allocator, polygons: []const g.Polygon, limits: g.Limits) !g.Geometry {
+/// so ring 0 stays the shell. `POLYGON EMPTY` — a polygon with no rings —
+/// encloses nothing and is dropped here, so no caller has to skip it.
+pub fn normalized(a: std.mem.Allocator, polygons: []const g.Polygon, limits: g.Limits) !g.Geometry {
     var result: g.Geometry = .{ .arena = std.heap.ArenaAllocator.init(a), .polygons = &.{} };
     errdefer result.deinit();
     const oa = result.arena.allocator();
     var paths: std.ArrayList(g.Path) = .empty;
     var segments: usize = 0;
     try normalize(oa, &paths, &segments, polygons, limits.max_segments, 0);
-    const out = try oa.alloc(g.Polygon, polygons.len);
+    var kept: usize = 0;
+    for (polygons) |poly| kept += @intFromBool(poly.rings.len != 0);
+    const out = try oa.alloc(g.Polygon, kept);
     var taken: usize = 0;
-    for (polygons, out) |poly, *shape| {
+    var at: usize = 0;
+    for (polygons) |poly| {
+        if (poly.rings.len == 0) continue;
         const rings = try oa.alloc(g.LinearRing, poly.rings.len);
         for (paths.items[taken..][0..poly.rings.len], rings) |path, *ring| ring.* = path.points;
         taken += poly.rings.len;
-        shape.* = .{ .rings = rings };
+        out[at] = .{ .rings = rings };
+        at += 1;
     }
     result.polygons = out;
     return result;
@@ -164,7 +181,7 @@ fn normalized(a: std.mem.Allocator, polygons: []const g.Polygon, limits: g.Limit
 /// fall out of that count rather than out of repair heuristics.
 pub fn buffer(a: std.mem.Allocator, input: BufferInput, distance: f64, options: BufferOptions) !g.Geometry {
     if (!std.math.isFinite(distance)) return error.NonFiniteCoordinate;
-    if (@abs(distance) > 1e140) return error.CoordinateRange;
+    if (@abs(distance) > g.coordinate_limit) return error.CoordinateRange;
     if (options.quadrant_segments < 1 or options.quadrant_segments > 1024) return error.InvalidOptions;
     // A lone polygon is not unioned first. JTS and GEOS build offset curves
     // straight from the rings, and a union pass here made us disagree with GEOS
@@ -196,9 +213,6 @@ pub fn buffer(a: std.mem.Allocator, input: BufferInput, distance: f64, options: 
     var paths: std.ArrayList(g.Path) = .empty;
     var count: usize = 0;
     for (united.polygons) |poly| {
-        // `POLYGON EMPTY` parses to a polygon with no rings at all, and the
-        // single-polygon path hands it straight through. It encloses nothing.
-        if (poly.rings.len == 0) continue;
         // A shell that erodes away takes its holes with it; a hole that fills in
         // simply stops being a hole.
         if (erodedCompletely(poly.rings[0], distance)) continue;
@@ -209,12 +223,7 @@ pub fn buffer(a: std.mem.Allocator, input: BufferInput, distance: f64, options: 
     }
     if (distance > 0) {
         for (input.line_strings) |raw| {
-            try g.validateLineString(raw);
-            // `geometry.zig` documents repeated adjacent coordinates as legal
-            // and common in real WKB, and `normalize` drops them from rings.
-            // Lines never got the same treatment, so a zero-length segment
-            // reached `offsetOf` and came back as `error.PrecisionLoss`.
-            const line = try deduplicate(sa, raw);
+            const line = try normalizedLine(sa, raw);
             if (line.len < 2) continue;
             // A closed line is ring linework, not an open chain, and buffering
             // it means the band either side of that ring — an annulus, until

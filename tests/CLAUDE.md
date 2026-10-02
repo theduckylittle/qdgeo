@@ -25,6 +25,12 @@ exhausts the 512 MiB heap.
 `pretest` runs `zig build wasm`, so the artifact under test is never stale and
 there is no setup step to forget.
 
+- **`jts/jts.test.mjs`** runs the overlay and buffer files and compares
+  geometry; **`jts/predicates.test.mjs`** runs the relate and prepared-geometry
+  files and compares booleans and matrices. `cases.mjs` splits the files
+  between them by name. The predicate suite has nothing to tolerate: a
+  `relate` case that spells out a full matrix is checked character for
+  character.
 - **`wasm.test.mjs`** drives the raw exports; **`binding.test.mjs`** drives
   `js/qdgeo.js`. They are separate on purpose: a rename in the ABI should break
   one of them loudly rather than both vaguely.

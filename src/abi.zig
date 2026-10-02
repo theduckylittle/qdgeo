@@ -139,13 +139,43 @@ pub fn execute(input: geo.BufferInput, op: u32, subject: u32, distance: f64, ste
     return geo.buffer(allocator, .{ .polygons = output.polygons }, distance, style);
 }
 
-fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
-    const borrowed = try flat.view(block[0..try flat.size(counts)], counts);
+/// The predicates, over the same block. `pattern` is a DE-9IM pattern packed
+/// three bits per cell in JTS's order, first cell lowest — `*` 0, `T` 1, `F`
+/// 2, `0` 3, `1` 4, `2` 5, and `A` 6 for a group of cells of which one must
+/// be non-empty. `*********` is zero and asks for the matrix itself, packed
+/// two bits per cell: 0 empty, else the dimension plus one. Any other pattern
+/// answers 0 or 1, and is evaluated lazily — the arrangement is walked only
+/// until the pattern is decided. Every named predicate is one such pattern,
+/// so the binding carries the names and this module carries none, the way
+/// `Mode` carries the boolean operations behind one `geom_apply`. A negative
+/// return is a status, negated. The three counts say how many of the block's
+/// leading points, line strings and polygons form the first operand; the rest
+/// are the second. The previous result is left alone: nothing here produces
+/// one.
+export fn geom_relate(pattern: u32, points: u32, line_strings: u32, polygons: u32) i32 {
+    return evaluate(pattern, points, line_strings, polygons) catch |err| return -@as(i32, @intCast(status(err)));
+}
+
+fn evaluate(pattern: u32, points: u32, line_strings: u32, polygons: u32) !i32 {
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
-    var output = try execute(try flat.input(scratch.allocator(), borrowed), op, subject, distance, steps);
+    const operands = (try borrowed(&scratch)).split(points, line_strings, polygons);
+    if (pattern == 0) return @intCast((try geo.relate(allocator, operands[0], operands[1], .{})).bits());
+    return @intFromBool(try geo.match(allocator, operands[0], operands[1], try geo.Pattern.fromBits(pattern), .{}));
+}
+
+fn run(op: u32, subject: u32, distance: f64, steps: u32) !void {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    var output = try execute(try borrowed(&scratch), op, subject, distance, steps);
     defer output.deinit();
     flat_result = try flat.output(allocator, output.polygons);
+}
+
+/// The host's block as borrowed geometry, cut in `scratch`: what both entry
+/// points start from.
+fn borrowed(scratch: *std.heap.ArenaAllocator) !geo.Collection {
+    return flat.input(scratch.allocator(), try flat.view(block[0..try flat.size(counts)], counts));
 }
 
 pub fn releaseResults() void {

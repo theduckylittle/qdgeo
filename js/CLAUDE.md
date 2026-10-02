@@ -7,10 +7,28 @@ gets generated from them. The root `CLAUDE.md` covers the project;
 ## The binding is the library, not an example
 
 **`js/qdgeo.js` is part of the published package.** Its named methods —
-`union`, `intersection`, `difference`, `symmetricDifference`, `buffer` — are
+`union`, `intersection`, `difference`, `symmetricDifference`, `buffer`, and
+the predicates `intersects`, `disjoint`, `contains`, `within`, `covers`,
+`coveredBy`, `touches`, `crosses`, `overlaps`, `equals` and `relate` — are
 what a caller should reach for; `apply` is the generic escape hatch. The binary
-methods take two operand lists and compute the module's `subject` split
-themselves, so the split never reaches a caller. `OP` and `STATUS` are exported
+methods take two operand lists and compute the module's operand split
+themselves, so the split never reaches a caller. One marshaller, `#marshal`,
+writes both operands' points, lines and polygons in the block's fixed order and
+hands back the first operand's three counts; `apply` uses the polygon count and
+`geom_relate` all three.
+
+An operand list may mix kinds, told apart by nesting depth — `[x, y]` a point,
+`[[x, y], …]` a line, `[[[x, y], …], …]` or a flat `{ coordinates, ringEnds }`
+a polygon. A list of shapes is passed through untouched, so `union([...])` is
+the same call it always was; only a list holding something else is sorted by
+kind.
+
+The named predicates are DE-9IM patterns, in `PATTERN`, with JTS's definitions
+and one extension (`A`: one of the marked cells is non-empty). The pattern is
+what crosses the ABI — `encode` packs it three bits a cell — and the module
+evaluates it lazily, so a named method is one `geom_relate` call, not a matrix
+plus a match in JavaScript. `src/relate.zig` holds the same table as
+`Predicate.pattern`; keep the two identical. `OP` and `STATUS` are exported
 from here, not redefined per example. `Geometry` (what `load()` resolves to)
 and `Result` are exported so TypeScript consumers and the API reference can
 name them; `load()` stays the only way to construct a `Geometry`.

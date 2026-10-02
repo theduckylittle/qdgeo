@@ -217,6 +217,137 @@ Three things there are load-bearing and easy to break:
   accuracy and fixes nothing. Turn it up only for a workload that cannot be
   noded, and say so.
 
+## Predicates (`src/relate.zig`)
+
+`relate(a, b) !Matrix` builds the DE-9IM matrix from an arrangement, not from
+an overlay: every vertex and crossing is a node, every segment is cut into
+pieces at its nodes, and each node and piece is located in both operands.
+**Evaluation is lazy.** A predicate is a `Pattern` over the matrix, the ABI
+takes the pattern (three bits a cell; nine stars is 0 and asks for the whole
+matrix), and because cells only grow as the arrangement is walked, the walk
+stops the moment `Pattern.verdict` is decided — an `F` filled, a dimension
+passed, or the last `T` filled with nothing left to wait for. The operand whose
+pieces can fail the pattern is walked first (`contains` fails on the exterior
+row, which the second operand's pieces fill). `apart` answers any pattern from
+the dimensions alone when the extents are disjoint, and the `intersects`
+pattern is routed to a path with an exit inside the sweep, at the first
+contact. The named predicates are patterns — `Predicate.pattern(dims)` here,
+`PATTERN` in the binding, the same table — with one extension to JTS's
+language: `A` marks a group of cells of which one must be non-empty, so
+`covers` and `touches` are one pattern each instead of four.
+
+Measured on 4,096 squares against 4,096 overlapping ones, min of 5: the full
+matrix 68 ms; `intersects` 6 ms on contact and 5 ms on disjoint extents;
+`contains` on disjoint extents 4 ms; the other named predicates about 58 ms —
+the arrangement build is the fixed cost and laziness saves the walk.
+
+Every path reads each operand as a union — a point on an edge shared by two
+polygons of one operand is *interior*, a line endpoint is boundary only when an
+odd number of that operand's lines end there — which is JTS's rule for a
+GeometryCollection, and the reason `intersects([a, b, c], [d, e, f])` means
+what it says.
+
+Five things there are load-bearing and were each learned from a failing case:
+
+- **A piece's location is probed at its midpoint with Sunday's half-open ray
+  cast**, the same construction `relabel` seeds from. The half-open rule
+  answers for a point an infinitesimal step *above* the midpoint, which for a
+  piece on a boundary is already one of its sides; the collinear edges then
+  separate the two sides, each adding one to the side its interior is on. Add
+  them to both sides and every boundary piece reads as interior — the first
+  bug.
+- **Coincidence is carried by identity, never re-derived from coordinates.**
+  A crossing is rounded, so a piece between two crossings is not on the line
+  of the segment it came from, and `orient` at its midpoint says "not
+  collinear" about a segment it is on. `meet` records collinear overlaps from
+  the exact test on the original coordinates, and the probe credits an edge as
+  coincident when it is marked *and* its box holds the midpoint — an overlap
+  is between whole segments, and the piece is cut at every end of every
+  overlapping segment, so it lies wholly inside or wholly outside each. JTS's
+  issue 396 case is the one that enforces this.
+- **A crossing is computed from canonical arguments** — lower endpoint first,
+  lower segment first — because `predicates.intersection` rounds differently
+  with its arguments swapped. Two coincident segments, one per operand, must
+  see their crossing with a third as one node, not two an ulp apart.
+- **Probes go through a grid over polygon extents** (`Grid`), one cell list
+  per probe instead of a scan of every polygon's box. Measured on 4,096
+  parcels against 4,096: `relate` 1,074 ms → 87 ms, the union of one side
+  being 90 ms; `contains` of 4,096 points 128 ms → 24 ms. Cost 4.3 KB raw,
+  1.6 KB gzipped. A polygon the size of the operand lists in every cell, so
+  past sixteen entries per polygon the grid collapses to one cell.
+- **Large polygons' edges are indexed by horizontal band** (`Bands`), because
+  a rightward ray at height `y` can only cross an edge whose y-range holds `y`.
+  Without it the parcels' 19,208-vertex polygon cost ~19,000 side tests per
+  probe and was probed ~19,000 times walking its own boundary: `relate` over
+  all 4,040 parcels took 10.6 s, now 0.33 s. Both indexes — this and `Grid` —
+  are built lazily by the arrangement; `intersects` never needs them, and
+  building them on every call was a quarter of a small call. The probe reads
+  either index through one loop, so the edge test is emitted once: two loops
+  cost 3 KB raw. `noinline` on the edge test saves 0.3 KB and costs 20%.
+- **`intersects` culls to the other operand's extent.** A segment whose box
+  misses the other's extent meets nothing of it, so it is never swept; a vertex
+  outside it is never probed. Exact, and it halves `intersects` of a query
+  against the whole dataset. Validation still covers every part. `relate`
+  cannot do the same: under union semantics a culled polygon changes how its
+  neighbours' shared edges read.
+- **A point operand skips the arrangement** (`pointMatrix`) when the other
+  operand is only polygons, only lines, or only points. A point operand has no
+  boundary, so its row is where each point falls, and the exterior row follows
+  from what the other operand is made of. Points in polygons go through the
+  probe, indexed past eight points; a point on a line is an exact `orient` and
+  box test, with the mod-2 rule for endpoints. Measured per call: a point in a
+  square 4.2 → 1.7 µs, in the 19,208-vertex parcel 8.1 → 0.62 ms, 4,040 points
+  in all the parcels 347 → 18 ms. Two exits back to the arrangement are
+  load-bearing. **A point exactly on a polygon edge** goes back, because under
+  union semantics a point on an edge two polygons share is interior, and only
+  the arrangement's radial view sees that. **More than eight points against
+  lines or points** goes back, because there membership is a scan: 4,040
+  points against 4,040 lines took 167 ms this way and 3.9 ms through the
+  sweep. A test in `relate.zig` holds the fast path to the arrangement cell for
+  cell on every input it answers.
+- **Each thing is written once, and the duplicates were where the bugs
+  were.** A deduplication pass found two wrong answers, both from logic that
+  existed in more than one copy. `Grid.coordinate` was one of three bucket
+  indexes, and the only one that converted to `u32` before clamping: a probe
+  far outside the grid trapped in `ReleaseSafe`. The named predicates read
+  operand dimensions from the raw input while the matrix used `Set`'s, so
+  `POLYGON EMPTY` beside a line made `crosses` pick the area rule and miss a
+  crossing. Both have regression tests, and GEOS 3.13 agrees with the fixed
+  answers. What is shared now, so it stays shared:
+  - `bucket` is the one bucket index, clamped as a float; `Lists` is the one
+    counting sort, behind the grid, the edge bands and the segment order.
+  - `prepare` builds both operands for every entry point, and dimensions come
+    only from `Set.dimension`.
+  - `Set.eachNear` is the one polygon-edge walk, for the winding probe and
+    the on-an-edge test. It is `inline` and takes a visitor: an iterator
+    struct measured 1.9x slower on a whole-dataset `relate`.
+  - `Set.edges` is the one list of polygon edges; `collect` reads it rather
+    than walking rings again, and `polygon_first` has a sentinel so no caller
+    computes a polygon's last edge.
+  - From the rest of the tree: `operations.normalized` drops `POLYGON EMPTY`
+    for buffer and predicates alike, `operations.normalizedLine` validates a
+    line for both, `predicates.onSegment`, `geometry.coordinate_limit`,
+    `Extent.grow`, `geometry.ends`, `Collection.split`, and the overlay's
+    `keyOf` and `canonical` for coordinate keys.
+- **Segments are ordered by a counting sort on x, not `pdq`.** A `pdq`
+  instantiation here measured 5.2 KB raw and 2.2 KB gzipped — the comparator
+  type is new, so nothing in the overlay's instantiation is shared. The sweep
+  only needs the order right between buckets: a segment retires once its right
+  end is left of the current bucket's floor.
+
+What did not pay, so it is not tried twice: splitting `predicates.orient` into
+an inlinable filter and a `noinline` exact fallback made the artifact **10 KB
+larger**, not smaller — the filter then inlined at every call site; and
+`noinline` on the five largest functions here changed nothing, so duplicate
+inlining is not where the bytes are. The feature's cost is **40.4 KB raw,
+16.0 KB gzipped** on top of 133.5 / 50.5 KB, the edge bands and the point fast
+path below included: `intersects` alone is about
+14 KB raw, the matrix machinery another 17 KB, and carrying the pattern into
+the module for lazy evaluation the last 5.4 KB raw / 1.8 KB gzipped — against
+the alternative of ten predicate codes in the module, which was 0.3 KB smaller
+and could not stop early. Dropping `apart` would save 1.4 KB raw and the
+"cannot possibly intersect" exit for every pattern but `intersects`.
+
 ## Geometry invariants
 
 - **Allocators are explicit.** `Geometry` owns an arena; call `deinit` once and
@@ -296,15 +427,16 @@ Three things there are load-bearing and easy to break:
 
 ## Host ABI (`src/abi.zig`, `src/abi_wkb.zig`)
 
-Single-threaded and non-reentrant. **Seven exports in the WASM build**:
-`geom_input`, `geom_apply`, the four `geom_result_*` accessors, and
-`geom_clear`. That is the entire browser surface; `tests/wasm.test.mjs` asserts
+Single-threaded and non-reentrant. **Eight exports in the WASM build**:
+`geom_input`, `geom_apply`, the four `geom_result_*` accessors, `geom_clear`,
+and `geom_relate` for the predicates. That is the entire browser surface; `tests/wasm.test.mjs` asserts
 the import list is empty. The browser is 90% of the target and size-sensitive:
 anything added to `abi.zig` is paid for by every page.
 
 The native library adds three for WKB: `geom_wkb_apply`, `geom_wkb_result_ptr`
-and `geom_wkb_result_len`. **Ten total.** `abi_wkb.zig` links only into the
-native library, which is what a Python module would use.
+and `geom_wkb_result_len`. **Eleven total.** `abi_wkb.zig` links only into the
+native library, which is what a Python module would use. The predicates have no
+WKB entry point.
 
 Both halves dispatch through one `abi.execute`, so the operation switch, the
 operand split and the buffer-composes-onto-a-boolean rule exist once. The two

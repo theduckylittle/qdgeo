@@ -6,6 +6,34 @@ Notable changes to qdgeo, newest first. The format follows
 the binding's API and the package's entry points only change with a major
 version.
 
+## Unreleased
+
+- The spatial predicates: `intersects`, `disjoint`, `contains`, `within`,
+  `covers`, `coveredBy`, `touches`, `crosses`, `overlaps` and `equals`, and the
+  DE-9IM `relate` matrix they are read from, with JTS's definitions, over any
+  mix of points, lines and polygons. Each operand is read as the union of its
+  members. Every predicate is lazy: it is a pattern over the matrix, and the
+  module stops building the matrix once the pattern is decided. Disjoint
+  extents answer from the dimensions alone; `intersects` answers at the first
+  contact, inside the sweep.
+- One new export, `geom_relate(pattern, points, line_strings, polygons)`: a
+  DE-9IM pattern packed three bits per cell, zero for the matrix itself, and
+  three counts on the block's operand split, one per kind. The artifact grows
+  to 173.9 KB raw, 66.5 KB gzipped.
+- Operand lists may mix geometries, told apart by nesting: `[x, y]`,
+  `[[x, y], …]`, `[[[x, y], …], …]`.
+- The ten JTS predicate case files, run verbatim: 330 of 330 assertions pass.
+- Fixed before release: `relate` trapped on a probe far outside the other
+  operand's polygons (a long line reaching a distant polygon), and `crosses`,
+  `touches` and `overlaps` counted `POLYGON EMPTY` toward an operand's
+  dimension. Both were duplicated logic, and both have regression tests.
+- A point against polygons, lines or points is located directly, with no
+  arrangement: point-in-polygon is 2-13x faster per call, and a point on a
+  line is answered by an exact `orient` test and the mod-2 endpoint rule.
+- Union and buffer are 5-12% faster: `Extent` uses compare-and-select instead
+  of `fmin`/`fmax` library calls, and the binding writes into one cached view
+  of linear memory with indexed loops.
+
 ## 1.0.0 — 2026-10-01
 
 First release.

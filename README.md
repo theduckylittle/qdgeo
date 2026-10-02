@@ -6,13 +6,16 @@ written in Zig and compiled to WebAssembly.
 qdgeo does five things: union, intersection, difference, symmetric difference,
 and rounded buffer. The buffer is also available as an option on the four
 boolean operations, so "subtract this, then grow the result by 5 m" is one call.
-That is very nearly all the geometry a web mapping application asks for. The
-WASM artifact is **133.5 KB raw, 50.5 KB gzipped**, declares no imports, and has
-no C or C++ dependency.
+It also answers the spatial predicates — `intersects`, `contains`, `touches`
+and the rest, and the DE-9IM `relate` matrix they are read from — over any mix
+of points, lines and polygons. That is very nearly all the geometry a web
+mapping application asks for. The WASM artifact is **173.9 KB raw, 66.5 KB
+gzipped**, declares no imports, and has no C or C++ dependency.
 
 > **Status.** The suites are green: 26 of 26 differential workloads, 155 of 158
-> applicable JTS assertions, and 0 failures across 57,990 buffers of adjacent
-> parcel clusters. The memory envelope is
+> applicable JTS overlay and buffer assertions, 330 of 330 JTS predicate
+> assertions, and 0 failures across 57,990 buffers of adjacent parcel
+> clusters. The memory envelope is
 > [measured and published](#memory-and-what-size-input-this-is-good-for), and
 > running out of heap is recoverable rather than fatal.
 >
@@ -24,14 +27,14 @@ no C or C++ dependency.
 
 ## At a glance
 
-| | size gzipped | speed | correct | operations bundled |
-| --- | ---: | ---: | ---: | --- |
-| **qdgeo** | **50.5 KB** | **1.00x** | **26 / 26** | four booleans, buffer |
-| polyclip-ts | 15.4 KB | 26x | 10 / 12 | four booleans, **no buffer** |
-| JSTS | 73.9 KB | 7.7x | 24 / 26 | four booleans, buffer |
-| Turf | 82.3 KB | 17x | 23 / 26 | union, buffer |
-| Rust Geo | 102.1 KB | 0.89x | 18 / 26 | union, buffer |
-| GEOS | 778 KB † | 1.4x † | 26 / 26 | all of GEOS |
+|             | size gzipped |     speed |     correct | operations bundled                |
+| ----------- | -----------: | --------: | ----------: | --------------------------------- |
+| **qdgeo**   |  **66.5 KB** | **1.00x** | **26 / 26** | four booleans, buffer, predicates |
+| polyclip-ts |      15.4 KB |       26x |     10 / 12 | four booleans, **no buffer**      |
+| JSTS        |      73.9 KB |      7.3x |     24 / 26 | four booleans, buffer             |
+| Turf        |      82.3 KB |       19x |     23 / 26 | union, buffer                     |
+| Rust Geo    |     102.1 KB |     0.86x |     18 / 26 | union, buffer                     |
+| GEOS        |     778 KB † |    1.8x † |     26 / 26 | all of GEOS                       |
 
 Speed is the geometric mean against qdgeo over each engine's **correct**
 workloads; lower is faster. Size is what a browser downloads — JavaScript
@@ -44,7 +47,11 @@ run GEOS in a browser, which carries the whole library. geos-wasm was not
 benchmarked.
 
 polyclip-ts is the smallest entry because it has no buffer. It is the only one
-here that does not.
+here that does not. The predicates are 16.0 KB of qdgeo's gzipped size. Adding
+them to the others, bundled the same way, takes JSTS to 75.8 KB, Turf to 95.8 KB
+and Rust Geo to 162.2 KB — see [Predicates](#predicates), which also has the
+speed comparison: on predicates Rust Geo is faster than qdgeo on most
+workloads, and qdgeo is faster at point-in-polygon.
 
 **Choosing between them.** qdgeo is the smallest library that does the whole job
 and returns correct geometry on every workload. Rust Geo is faster but returns
@@ -68,7 +75,13 @@ import { load } from 'qdgeo';
 const geo = await load();
 
 const square = (x, y, w) => [
-  [[x, y], [x + w, y], [x + w, y + w], [x, y + w], [x, y]],
+  [
+    [x, y],
+    [x + w, y],
+    [x + w, y + w],
+    [x, y + w],
+    [x, y],
+  ],
 ];
 const a = square(0, 0, 10);
 const b = square(5, 5, 10);
@@ -79,10 +92,47 @@ geo.difference([a], [b]); // a with b cut out
 geo.symmetricDifference([a], [b]);
 geo.buffer([a], 2); // grown by 2; negative shrinks
 geo.buffer([a], 2, { steps: 32 }); // finer arcs
+
+geo.intersects([a], [b]); // true
+geo.contains(
+  [a],
+  [
+    [2, 2],
+    [
+      [1, 1],
+      [3, 3],
+    ],
+  ],
+); // a point and a line, both inside
+geo.touches([a], [square(10, 0, 10)]); // true: they share an edge
+geo.relate([a], [b]); // '212101212', the DE-9IM matrix
+geo.relate([a], [b], 'T*T***T**'); // true: a pattern match
 ```
 
 The binary operations take two operand lists, so either side can hold several
 shapes; `union` and `buffer` are n-ary over one list.
+
+The predicates — `intersects`, `disjoint`, `contains`, `within`, `covers`,
+`coveredBy`, `touches`, `crosses`, `overlaps` and `equals`, with JTS's
+definitions — take any geometry on either side. A list holds any mix, told
+apart by nesting: `[x, y]` is a point, `[[x, y], …]` a line and
+`[[[x, y], …], …]` a polygon; `{ points, lines, polygons }` names them
+instead. Each list is read as **one** geometry, the union of its members, so a
+point on an edge two polygons in the list share is inside the list, and
+`intersects([a, b, c], [d, e, f])` asks whether the two unions meet.
+
+Every predicate is **lazy**. Each one is a pattern over the DE-9IM matrix, the
+pattern goes into the module, and the module stops building the matrix the
+moment the pattern is decided: `contains` stops at the first point of `b`
+outside `a`, `touches` at the first interior point in common. Disjoint extents
+answer any of them from the dimensions alone, before a coordinate is read, and
+`intersects` goes one step further — the first contact answers `true` inside
+the sweep, before anything is located. `relate(a, b)` returns the full matrix
+as the nine characters JTS prints; `relate(a, b, pattern)` matches a pattern of
+`T`, `F`, `0`, `1`, `2` and `*` lazily too, plus `A` for a group of cells of
+which one must be non-empty — the extension that makes `covers` or `touches`
+one pattern rather than four. The named methods are those patterns, exported
+as `PATTERN`.
 
 **What comes out goes back in.** A result is a collection of shapes, so it is an
 operand anywhere one is accepted, and operations chain without unpacking
@@ -112,7 +162,7 @@ That is the layout OpenLayers keeps and deck.gl wants, which is why the
 The module needs no host functions and instantiates with an empty import
 object, so calling it directly is reasonable too — `geo.apply(op, a, b, opts)`
 is the generic form, and [Host ABI](#host-abi) describes the block layout and
-the seven exports.
+the eight exports.
 
 ### Loading the module
 
@@ -122,10 +172,10 @@ the seven exports.
 module more than once:
 
 ```js
-await load();                                         // beside the binding, the default
-await load('https://example.com/qdgeo.wasm');         // anywhere else
+await load(); // beside the binding, the default
+await load('https://example.com/qdgeo.wasm'); // anywhere else
 await load(new URL('./qdgeo.wasm', import.meta.url)); // what the default does
-await load(await WebAssembly.compile(bytes));         // compiled already
+await load(await WebAssembly.compile(bytes)); // compiled already
 ```
 
 In Node the `file:` case is read through `node:fs` rather than fetched, because
@@ -140,11 +190,11 @@ ESM only, `sideEffects: false`, types generated from the JSDoc by
 beside the examples; `npm run docs` builds it locally into `docs/api/`. Four
 entry points:
 
-| | |
-| --- | --- |
-| `qdgeo` | the binding |
-| `qdgeo/deck` | deck.gl binary conversion |
-| `qdgeo/leaflet` | Leaflet's open rings, both directions |
+|                    |                                                          |
+| ------------------ | -------------------------------------------------------- |
+| `qdgeo`            | the binding                                              |
+| `qdgeo/deck`       | deck.gl binary conversion                                |
+| `qdgeo/leaflet`    | Leaflet's open rings, both directions                    |
 | `qdgeo/qdgeo.wasm` | the module itself, for pointing a bundler straight at it |
 
 The last is what makes a custom setup possible without guessing at paths:
@@ -194,7 +244,7 @@ opt-in process. [TESTING.md](TESTING.md) covers both.
 
 **1. Speed.** WebAssembly and vector operations, to be meaningfully faster than
 libraries like Turf rather than incidentally faster. On the full parcel dataset
-union that is **24x Turf**, 22x JSTS, and 3.1x native GEOS.
+union that is **24x Turf**, 24x JSTS, and 3.0x native GEOS.
 
 **2. Small size.** Zig's standard library is minimal and pay-for-what-you-use,
 and it emits C-compatible library formats. Every byte in the artifact is paid
@@ -209,14 +259,15 @@ the answer wins.
 
 The shipped WASM keeps its runtime safety checks. They are close to free:
 
-| | raw | gzipped | speed | output |
-| --- | ---: | ---: | ---: | --- |
-| `ReleaseSafe` (shipped) | 133.5 KB | 50.5 KB | 1.00x | — |
-| `ReleaseFast` | 134.0 KB | 48.2 KB | 1.11x | bit-identical |
+|                         |      raw | gzipped | speed | output        |
+| ----------------------- | -------: | ------: | ----: | ------------- |
+| `ReleaseSafe` (shipped) | 173.9 KB | 66.5 KB | 1.00x | —             |
+| `ReleaseFast`           | 171.0 KB | 62.0 KB | 1.09x | bit-identical |
 
-`ReleaseFast` is 11% faster, 0.5 KB larger raw and 2.4 KB smaller gzipped, and
-produces byte-for-byte identical geometry across all 26 workloads.
-`ReleaseSmall` reaches 72.0 KB raw and 32.5 KB gzipped if size ever matters more
+`ReleaseFast` is 9% faster, 2.9 KB smaller raw and 4.5 KB smaller gzipped, and
+produces byte-for-byte identical geometry across all 26 workloads. It ships
+`ReleaseSafe` anyway, for the runtime safety checks — goal 4 — not for size.
+`ReleaseSmall` reaches 97.3 KB raw and 43.3 KB gzipped if size ever matters more
 than either.
 
 ## The parcel dataset
@@ -260,14 +311,14 @@ Versions: GEOS 3.13.1 (Shapely 2.1.2), JSTS 2.12.1, Turf 7.4.0, polyclip-ts
 
 ### Correctness
 
-| | workloads passed | worst vertex error | rings returned |
-| --- | ---: | ---: | ---: |
-| **qdgeo** | **26 / 26** | **0 m** | 444 |
-| GEOS | 26 / 26 | 7.2e-5 m | 445 |
-| JSTS | 24 / 26 | 1.4e-5 m | 447 |
-| Turf | 23 / 26 | 2.0e-4 m | 444 |
-| polyclip-ts | 10 / 12 | 2.0e-4 m | 444 |
-| Rust Geo | 18 / 26 | 1961 m | **382** |
+|             | workloads passed | worst vertex error | rings returned |
+| ----------- | ---------------: | -----------------: | -------------: |
+| **qdgeo**   |      **26 / 26** |            **0 m** |            444 |
+| GEOS        |          26 / 26 |           7.2e-5 m |            445 |
+| JSTS        |          24 / 26 |           1.4e-5 m |            447 |
+| Turf        |          23 / 26 |           2.0e-4 m |            444 |
+| polyclip-ts |          10 / 12 |           2.0e-4 m |            444 |
+| Rust Geo    |          18 / 26 |             1961 m |        **382** |
 
 Vertex error is the distance from a disputed output vertex to where exact
 rational arithmetic puts it. Ring counts are for the full-dataset union. GEOS is
@@ -285,42 +336,45 @@ polyclip-ts runs union only, so it has 12 workloads rather than 26.
 
 Milliseconds. † marks a wrong answer.
 
-| parcels | qdgeo wasm | qdgeo native | GEOS | Rust Geo | JSTS | Turf | polyclip-ts |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 0.21 | 0.12 | 0.26 | 0.043 † | 12 | 3.2 | 4.6 |
-| 100 | 1.4 | 1.1 | 4.0 | 0.36 † | 37 | 21 | 22 |
-| 1,000 | 21 | 17 | 66 | 3.5 † | 450 † | 410 † | 420 † |
-| 4,040 | 150 | 130 | 410 | 14 † | 3400 † | 3500 † | 3700 † |
+| parcels | qdgeo wasm | qdgeo native | GEOS | Rust Geo |   JSTS |   Turf | polyclip-ts |
+| ------: | ---------: | -----------: | ---: | -------: | -----: | -----: | ----------: |
+|      10 |       0.18 |        0.095 | 0.25 |  0.061 † |     11 |    2.4 |         4.1 |
+|     100 |        1.4 |          1.0 |  3.5 |   0.19 † |     34 |     19 |          20 |
+|   1,000 |         16 |           14 |   54 |    2.5 † |  390 † |  380 † |       360 † |
+|   4,040 |        120 |          110 |  370 |     13 † | 2900 † | 2900 † |      3000 † |
 
 On the two largest unions, only qdgeo and GEOS return the right geometry.
 
 ### Buffer
 
-| case | qdgeo wasm | GEOS | Rust Geo | JSTS | Turf |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1 parcel, +2 m | 0.046 | 0.056 | 0.034 | 0.34 | 1.0 |
-| 100 parcels, +2 m | 1.3 | 4.3 | 0.36 | 30 | 27 |
-| 100 parcels, -10 m | 1.5 | 4.3 | 0.47 † | 31 | 28 |
-| 19,208-coordinate parcel, +2 m | 31 | 8.4 | 52 | 29 | 86 |
-| 19,208-coordinate parcel, -2 m | 31 | 13 | 68 | 28 | 79 |
+| case                           | qdgeo wasm |  GEOS | Rust Geo | JSTS | Turf |
+| ------------------------------ | ---------: | ----: | -------: | ---: | ---: |
+| 1 parcel, +2 m                 |      0.035 | 0.041 |    0.029 | 0.34 | 0.87 |
+| 100 parcels, +2 m              |        1.1 |   3.7 |     0.28 |   25 |   24 |
+| 100 parcels, -10 m             |        1.2 |   4.7 |   0.39 † |   25 |   23 |
+| 19,208-coordinate parcel, +2 m |         25 |   8.7 |       47 |   26 |   75 |
+| 19,208-coordinate parcel, -2 m |         25 |    12 |       57 |   23 |   71 |
 
 ### Overall
 
 Geometric mean against qdgeo in WASM, over each engine's **correct** workloads
 only. Above 1.00 is slower than qdgeo.
 
-| | speed | workloads averaged | excluded as wrong |
-| --- | ---: | ---: | --- |
-| Rust Geo | 0.89x | 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
-| **qdgeo wasm** | **1.00x** | 26 | none |
-| GEOS native | 1.4x | 26 | none |
-| JSTS | 7.7x | 24 | 2 parcel unions |
-| Turf | 17x | 23 | 2 parcel unions, 1 buffer |
-| polyclip-ts | 26x | 10 | 2 parcel unions |
+|                |     speed | workloads averaged | excluded as wrong                                |
+| -------------- | --------: | -----------------: | ------------------------------------------------ |
+| Rust Geo       |     0.86x |                 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
+| **qdgeo wasm** | **1.00x** |                 26 | none                                             |
+| GEOS native    |      1.8x |                 26 | none                                             |
+| JSTS           |      7.3x |                 24 | 2 parcel unions                                  |
+| Turf           |       19x |                 23 | 2 parcel unions, 1 buffer                        |
+| polyclip-ts    |       26x |                 10 | 2 parcel unions                                  |
 
-Across the three runs those means spanned 0.79-0.92, 1.3-1.5, 7.5-8.0, 16-18 and
-25-26 respectively. Treat them as one significant figure of real information
-each.
+Across the three runs those means spanned 0.79-0.95, 1.2-1.9, 6.4-8.6, 14-20 and
+22-29 respectively. Treat them as one significant figure of real information
+each. Measured against the 1.0.0 artifact in the same process, interleaved,
+qdgeo's own union and buffer are 5-12% faster than at 1.0.0 — the 4,040-parcel
+union 139 ms against 124 ms; the rest of the movement from the previous tables
+is machine state, which GEOS's column moved by too.
 
 Timing boundaries are not equal across engines. qdgeo and Rust Geo are the only
 matched pair: both WASM, same Node process, same flat ABI. GEOS is native and
@@ -328,6 +382,64 @@ receives live geometry objects, so it pays no parse or encode where qdgeo pays a
 full WKB round trip. Turf's buffers include reprojection. Medians also move with
 machine state, so treat a gap under 20% as unresolved.
 [tests/compare/README.md](tests/compare/README.md) documents each boundary.
+
+### Predicates
+
+The differential suite does not cover predicates, so these come from a
+separate benchmark on the same 4,040 parcels: the median of three runs, each a
+median of seven. Every engine returned the same answer on every workload.
+qdgeo and Rust Geo are the matched pair here too: both WASM, both starting from
+nested JavaScript arrays and copying them into linear memory on every call.
+JSTS and Turf start from geometry objects they already hold. GEOS is native,
+measured in its own process, and its vectorized column is one C loop over all
+4,040.
+
+Milliseconds for the whole workload.
+
+| workload                                  | qdgeo | Rust Geo | JSTS |  Turf | GEOS loop | GEOS vectorized |
+| ----------------------------------------- | ----: | -------: | ---: | ----: | --------: | --------------: |
+| `intersects`, disc vs each parcel × 4,040 |    17 |       10 |   18 |   280 |        16 |             0.9 |
+| `contains`, parcel vs a point × 4,040     |    13 |       20 |   80 | 2.6 ‡ |        25 |             2.9 |
+| `contains`, disc vs each parcel × 4,040   |    27 |       19 |  9.0 |   140 |        12 |             0.3 |
+| `touches`, neighbour pairs × 1,000        |   4.4 |      4.2 |  4.5 |     — |       4.6 |               — |
+| `relate`, neighbour pairs × 1,000         |    17 |      7.4 |   11 |     — |       4.0 |               — |
+| `intersects`, rect vs all 4,040 as one    |   7.9 |      4.7 |  0.0 |     — |       0.0 |               — |
+| `relate`, rect vs all 4,040 as one        |   360 |      490 |  ✗ § |     — |       1.6 |               — |
+
+‡ Turf's `booleanPointInPolygon`, a point-only routine; its general
+`booleanContains` is not tested against points here. § JSTS throws
+`TopologyException: side location conflict`: adjacent parcels make the merged
+MultiPolygon invalid under OGC rules, and JSTS's relate cannot label it. qdgeo
+reads a list as a union and answers. Turf has no `relate` or `touches` on
+polygons that runs on this data. Rust Geo goes through `rg_predicate` in
+`tests/compare/rust`, built with `--features predicates`.
+
+**On predicates qdgeo is not the fastest overall.** Against Rust Geo, the
+matched pair, it is ahead on point-in-polygon and whole-dataset `relate`, level
+on `touches`, and behind on the rest by 1.4-2.3x. A point against polygons,
+lines or other points never builds an arrangement: it is located directly, so
+point-in-polygon is 4.6x faster than it was and ahead of every engine but
+Turf's point-only routine and vectorized GEOS. qdgeo is level with JSTS on
+`intersects` and `touches`, 6x faster on point-in-polygon, behind on `contains`
+of whole parcels and on `relate`, and 10-16x faster than Turf. Against one
+geometry built from the whole dataset, JSTS and GEOS answer `intersects` in
+microseconds through a rectangle fast path, and GEOS's `relate` through
+RelateNG's indexes.
+
+Bundled the way `npm run sizes` bundles, adding the predicates costs:
+
+|          |  without | with predicates |    added |
+| -------- | -------: | --------------: | -------: |
+| qdgeo    |  50.5 KB |         66.5 KB | +16.0 KB |
+| JSTS     |  73.9 KB |         75.8 KB |  +1.9 KB |
+| Turf     |  81.9 KB |         95.8 KB | +13.9 KB |
+| Rust Geo | 102.1 KB |        162.2 KB | +60.1 KB |
+
+JSTS adds the least because `relate` reuses the geometry graph its overlay
+already carries. Turf's is nine separate `@turf/boolean-*` packages. Rust Geo's
+is its `Relate`, `Intersects` and `Contains` traits monomorphised for the two
+operand pairs the shim asks about; it is the largest artifact here with or
+without them.
 
 ## Invalid input
 
@@ -341,12 +453,12 @@ JTS and GEOS choose differently. They buffer a degenerate polygon by falling
 back to its linework, and when floating-point noding fails they retry on
 progressively coarser snap-rounded grids before giving up.
 
-| | qdgeo | JTS / GEOS |
-| --- | --- | --- |
-| Degenerate ring | error | buffers its linework |
-| Noding failure | error | retries on coarser grids |
-| Precision option | none | fixed precision models |
-| When it answers | the answer is exact | the answer may be snapped |
+|                  | qdgeo               | JTS / GEOS                |
+| ---------------- | ------------------- | ------------------------- |
+| Degenerate ring  | error               | buffers its linework      |
+| Noding failure   | error               | retries on coarser grids  |
+| Precision option | none                | fixed precision models    |
+| When it answers  | the answer is exact | the answer may be snapped |
 
 The "noding failure" row is not only about bad geometry — it is also the one
 case where **valid** input can fail. See the next section.
@@ -407,13 +519,13 @@ The browser is the target, so the ceiling is the WASM heap: **512 MiB**, set in
 `build.zig`. Peak use, measured through the flat ABI by reading
 `memory.buffer.byteLength` after each call:
 
-| workload | input coordinates | peak heap | KiB per coordinate |
-| --- | ---: | ---: | ---: |
-| union, 10 parcels | 80 | 1.5 MiB | 19.2 |
-| union, 100 parcels | 936 | 2.8 MiB | 3.08 |
-| union, 1,000 parcels | 17,231 | 11.6 MiB | 0.69 |
-| union, 4,040 parcels | 135,080 | 81.8 MiB | 0.62 |
-| buffer, 19,208-coordinate parcel | 19,208 | 23.7 MiB | 1.26 |
+| workload                         | input coordinates | peak heap | KiB per coordinate |
+| -------------------------------- | ----------------: | --------: | -----------------: |
+| union, 10 parcels                |                80 |   1.5 MiB |               19.2 |
+| union, 100 parcels               |               936 |   2.8 MiB |               3.08 |
+| union, 1,000 parcels             |            17,231 |  11.6 MiB |               0.69 |
+| union, 4,040 parcels             |           135,080 |  81.8 MiB |               0.62 |
+| buffer, 19,208-coordinate parcel |            19,208 |  23.7 MiB |               1.26 |
 
 Fixed overhead dominates below about a thousand coordinates. Past that the
 marginal cost settles near **0.62 KiB per coordinate for a union and 1.3 for a
@@ -453,15 +565,30 @@ under EDL-1.0, so "passes the JTS suite" means the actual suite.
 npm test -- tests/jts
 ```
 
-| File | pass | fail | skip |
-| --- | ---: | ---: | ---: |
-| `TestOverlayAA.xml` | 40 | 0 | 4 |
-| `TestNGOverlayA.xml` | 80 | 0 | 8 |
-| `TestBuffer.xml` | 35 | 3 | 3 |
-| **Total** | **155** | **3** | **15** |
+| File                                               |    pass |  fail |   skip |
+| -------------------------------------------------- | ------: | ----: | -----: |
+| `TestOverlayAA.xml`                                |      40 |     0 |      4 |
+| `TestNGOverlayA.xml`                               |      80 |     0 |      8 |
+| `TestBuffer.xml`                                   |      35 |     3 |      3 |
+| `TestPreparedPointPredicate.xml`                   |       3 |     0 |      0 |
+| `TestPreparedPolygonPredicate.xml`                 |      57 |     0 |      0 |
+| `TestPreparedPredicatesWithGeometryCollection.xml` |      11 |     0 |      0 |
+| `TestRectanglePredicate.xml`                       |      70 |     0 |      0 |
+| `TestRelateAA.xml`                                 |      41 |     0 |      0 |
+| `TestRelateLA.xml`                                 |      13 |     0 |      0 |
+| `TestRelateLL.xml`                                 |      46 |     0 |      0 |
+| `TestRelatePA.xml`                                 |      77 |     0 |     44 |
+| `TestRelatePL.xml`                                 |       8 |     0 |      0 |
+| `TestRelatePP.xml`                                 |       4 |     0 |      0 |
+| **Total**                                          | **485** | **3** | **59** |
 
 **Every boolean operation assertion passes: 120 of 120**, across both JTS's
-original overlay engine and OverlayNG.
+original overlay engine and OverlayNG, and **every predicate assertion
+passes: 330 of 330** — every `relate` matrix character for character, and
+every named predicate over polygons, lines, points and collections of them.
+The 44 predicate skips are all one shape, `MULTIPOINT(EMPTY, (0 0))`, which
+JSTS's `WKTReader` cannot parse; that is JTS's answer to the input, not
+qdgeo's, and it is counted separately.
 
 Twelve of the skips expect a Point, LineString, or GeometryCollection. qdgeo
 returns polygons only, so they are out of scope and are counted separately
@@ -469,7 +596,7 @@ rather than scored as passes. The other three belong to one case,
 `POLYGON ((0 0, 10 10, 0 0))`, that JTS's own `WKTReader` refuses to load at
 all — three points is not a LinearRing. The 3 failures are degenerate rings —
 see [Invalid input](#invalid-input). They are named individually and asserted
-with `test.fails`, so an unexpected *pass* is reported too.
+with `test.fails`, so an unexpected _pass_ is reported too.
 
 The reference side of this suite is JSTS — JTS itself, ported to JavaScript —
 rather than a second implementation of JTS's comparison rules. `BufferResultMatcher`'s
@@ -489,7 +616,7 @@ offsets — so for both it is a bulk copy rather than a serialiser.
 
     [ 2 * coordinates f64 ][ rings u32 ][ polygons u32 ][ line strings u32 ]
 
-Every index is an exclusive end offset. Offsets count *coordinates*, not
+Every index is an exclusive end offset. Offsets count _coordinates_, not
 numbers, so they do not depend on OpenLayers' stride. Coordinates run in a fixed
 order: Points, then LineString vertices, then LinearRing vertices. Polygon ends
 index into the ring ends.
@@ -518,10 +645,23 @@ Single-threaded and non-reentrant:
   grow the overlap by 5 m" is a single call and the intermediate geometry never
   crosses the boundary. Pass `0` to leave a boolean result alone. `steps` is
   segments per quarter circle on a rounded corner.
+
 - `geom_result_ptr()`, `geom_result_coordinates()`, `geom_result_rings()`,
   `geom_result_polygons()` — results are always areal, so the result block
   carries coordinates, ring ends, and polygon ends.
 - `geom_clear()` releases the result.
+- `geom_relate(pattern, points, line_strings, polygons) -> answer` — the
+  predicates, over the same block. The three counts say how many of the
+  block's leading points, line strings and polygons form the first operand;
+  the rest are the second. `pattern` is a DE-9IM pattern packed three bits
+  per cell in JTS's order, first cell lowest: `*` 0, `T` 1, `F` 2, `0` 3,
+  `1` 4, `2` 5, and `A` 6 for a group of cells of which one must be non-empty.
+  Nine stars pack to 0 and ask for the matrix itself, two bits per cell — 0
+  for empty, else the dimension plus one. Any other pattern answers 0 or 1,
+  evaluated lazily. The named predicates are patterns the binding carries;
+  the module carries none, the way `Mode` carries the boolean operations
+  behind one `geom_apply`. A negative answer is a status, negated. Nothing
+  here produces a result block, so the previous result is left alone.
 
 Status: 0 success, 1 allocation error where recoverable, 2 unsupported geometry,
 3 count/point limit, 4 precision/range error, 5 malformed geometry or overlay
@@ -543,7 +683,7 @@ exports.
 
 The browser is 90% of the target and is size-sensitive, so WKB is kept out of
 the WASM build entirely. The coordinate block is the whole browser surface:
-seven exports, no parser, no writer.
+eight exports, no parser, no writer.
 
 The native library keeps WKB, because that is how qdgeo reaches GeoParquet,
 PostGIS, and the comparison suite. A Python module would link the same path.
@@ -557,8 +697,9 @@ so both ABIs have the same five:
 - `geom_wkb_result_ptr()`, `geom_wkb_result_len()`
 
 Input bytes are borrowed for the duration of the call. Results go through
-`geom_clear()` like any other. Ten exports in total: seven for the coordinate
-block, three for WKB.
+`geom_clear()` like any other. Eleven exports in total: eight for the
+coordinate block, three for WKB. The predicates have no WKB entry point; a
+native host has the Zig API.
 
 ### Host adapters, JavaScript only
 
@@ -605,7 +746,7 @@ metre buffers. The library does not infer or transform CRS from WKB.
 ### Types
 
 Types carry GeoJSON and OpenLayers names. `Coordinate { x, y }` is the pair —
-both specs call a *Point* a geometry, not a coordinate. `LinearRing` and
+both specs call a _Point_ a geometry, not a coordinate. `LinearRing` and
 `LineString` are `[]const Coordinate`, `Polygon { rings }` holds the shell first
 and holes after, and rings must close. `Extent` is the bounding box OpenLayers
 calls an extent. All are borrowed views.
@@ -622,11 +763,20 @@ value. Results never borrow input storage.
   `unionAll(allocator, polygons, BooleanOptions) !Geometry` is the n-ary union
   over one list. Valid input topology is a precondition and is not fully
   validated. Input winding and repeated points are normalised before overlay.
+- `relate(allocator, Collection, Collection, RelateOptions) !Matrix` is the
+  full DE-9IM matrix for one collection against another, with union semantics
+  over each collection; `Matrix.string()` is its nine characters.
+  `matches(allocator, a, b, "T*F**F***", options) !bool` evaluates a pattern
+  lazily — the arrangement is walked only until the pattern is decided — and
+  `predicate(allocator, a, b, .contains, options) !bool` does the same for a
+  named predicate, whose pattern `Predicate.pattern(dims)` gives.
+  `intersects(allocator, a, b, options) !bool` is the path with the exit
+  inside the sweep.
 - `buffer(allocator, BufferInput, distance, BufferOptions) !Geometry` is the
   only buffer entry point. It takes polygons, lines, and points together — a
   point buffers to a disc, a line to a stadium, and neither survives a negative
   distance — so the common case reads `buffer(a, .{ .polygons = shapes }, 2,
-  .{})`. Areal input is unioned first. Holes, splitting, and collapse are all
+.{})`. Areal input is unioned first. Holes, splitting, and collapse are all
   supported. Zero distance runs union and normalisation, not a byte-identical
   copy.
 

@@ -9,6 +9,26 @@ pub const LinearRing = []const Coordinate;
 pub const LineString = []const Coordinate;
 pub const Polygon = struct { rings: []const LinearRing };
 
+/// Any mix of polygons, lines and points, read as one geometry. It is what
+/// buffer grows and what the predicates compare, so the one name serves both.
+pub const Collection = struct {
+    polygons: []const Polygon = &.{},
+    line_strings: []const LineString = &.{},
+    points: []const Coordinate = &.{},
+
+    /// Two operands from one: the leading `points`, `line_strings` and
+    /// `polygons` of each kind, and the rest. Counts past the end take all.
+    pub fn split(c: Collection, points: usize, line_strings: usize, polygons: usize) [2]Collection {
+        const p = @min(points, c.points.len);
+        const l = @min(line_strings, c.line_strings.len);
+        const a = @min(polygons, c.polygons.len);
+        return .{
+            .{ .points = c.points[0..p], .line_strings = c.line_strings[0..l], .polygons = c.polygons[0..a] },
+            .{ .points = c.points[p..], .line_strings = c.line_strings[l..], .polygons = c.polygons[a..] },
+        };
+    }
+};
+
 /// The contract both overlay engines implement. `layer` selects which winding
 /// counter an input path contributes to.
 pub const Path = struct { points: []const Coordinate, layer: u1 = 0 };
@@ -93,6 +113,10 @@ pub fn finite(p: Coordinate) bool {
     return @reduce(.And, @abs(vec(p)) <= splat(std.math.floatMax(f64)));
 }
 
+/// The largest coordinate magnitude any operation accepts. Past it, the
+/// products inside the exact predicates and the offset arithmetic overflow.
+pub const coordinate_limit = 1e140;
+
 pub fn within(p: Coordinate, limit: f64) bool {
     return @reduce(.And, @abs(vec(p)) <= splat(limit));
 }
@@ -109,6 +133,17 @@ pub fn allWithin(points: []const Coordinate, limit: f64) bool {
     return i == points.len or within(points[i], limit);
 }
 
+/// Lane-wise minimum and maximum as a compare and a select. `@min` and `@max`
+/// on `f64` lower to `fmin` / `fmax` library calls on wasm32, for NaN
+/// semantics nothing here needs — every coordinate is checked finite before it
+/// reaches a box — and they were 9% of a small predicate call.
+pub inline fn lower(a: V2, b: V2) V2 {
+    return @select(f64, a < b, a, b);
+}
+pub inline fn upper(a: V2, b: V2) V2 {
+    return @select(f64, a > b, a, b);
+}
+
 /// Axis-aligned bounds. Every operation is a lane-wise minimum, maximum or
 /// comparison, so a box test is two instructions and a reduce.
 pub const Extent = struct {
@@ -118,20 +153,24 @@ pub const Extent = struct {
     pub fn of(a: Coordinate, b: Coordinate) Extent {
         const u = vec(a);
         const v = vec(b);
-        return .{ .min = coordinate(@min(u, v)), .max = coordinate(@max(u, v)) };
+        return .{ .min = coordinate(lower(u, v)), .max = coordinate(upper(u, v)) };
     }
     pub fn around(points: []const Coordinate) Extent {
         var low = vec(points[0]);
         var high = low;
         for (points[1..]) |p| {
             const v = vec(p);
-            low = @min(low, v);
-            high = @max(high, v);
+            low = lower(low, v);
+            high = upper(high, v);
         }
         return .{ .min = coordinate(low), .max = coordinate(high) };
     }
+    /// `box` merged into an extent that may not exist yet.
+    pub fn grow(e: ?Extent, box: Extent) Extent {
+        return if (e) |have| have.merge(box) else box;
+    }
     pub fn merge(a: Extent, b: Extent) Extent {
-        return .{ .min = coordinate(@min(vec(a.min), vec(b.min))), .max = coordinate(@max(vec(a.max), vec(b.max))) };
+        return .{ .min = coordinate(lower(vec(a.min), vec(b.min))), .max = coordinate(upper(vec(a.max), vec(b.max))) };
     }
     pub fn overlaps(a: Extent, b: Extent) bool {
         return @reduce(.And, vec(a.min) <= vec(b.max)) and @reduce(.And, vec(b.min) <= vec(a.max));
@@ -164,6 +203,11 @@ pub fn distanceSquaredToSegment(a: Coordinate, b: Coordinate, p: Coordinate) f64
 
 pub fn distanceToSegment(a: Coordinate, b: Coordinate, p: Coordinate) f64 {
     return @sqrt(distanceSquaredToSegment(a, b, p));
+}
+
+/// A line's two ends, which is what the mod-2 boundary rule counts.
+pub fn ends(line: LineString) [2]Coordinate {
+    return .{ line[0], line[line.len - 1] };
 }
 
 pub fn validateLineString(c: LineString) !void {

@@ -92,7 +92,7 @@ expected to have byte-identical arc vertices. polyclip-ts itself has no buffer A
 A lone union input is duplicated for Turf's two-feature requirement.
 
 GEOS/Shapely is the reference, not an infallible exact-arithmetic oracle, and on
-this dataset it demonstrably is not one for *position*. Two measured effects:
+this dataset it demonstrably is not one for _position_. Two measured effects:
 
 - On nearly parallel parcel edges its f64 line intersector misplaces a vertex by
   up to `1.2e-4 m`. Reconstructed with rational arithmetic from the two input
@@ -138,6 +138,15 @@ boundary displacement. GEOS and polyclip differ by one effectively zero-area hol
 Negative buffering can amplify such differences into substantial strips of area.
 A domain-specific precision/topology policy must precede engine selection.
 
+## Predicates
+
+`rg_predicate` in `rust/src/lib.rs` exposes Rust Geo's `Intersects`,
+`Contains` and `Relate` behind a `predicates` Cargo feature, so the
+union-and-buffer artifact the suite measures and `npm run sizes` reports is
+unchanged. Build it with
+`cargo build --release --target wasm32-unknown-unknown --features predicates`.
+The README's predicate table compares it with qdgeo, JSTS, Turf and GEOS.
+
 ## Timing boundaries and limitations
 
 One warmup, then the requested number of repetitions, serial execution. Module
@@ -155,7 +164,7 @@ enough to change conclusions. Read a row with them in mind:
 - **Zig native**: WKB parse → overlay → WKB encode → copy to host → release.
   Native borrows Python's existing input bytes. End-to-end API timings.
 - **GEOS** gets the most favourable boundary of any engine: `shapely.union_all`
-  over geometries that are *already* GEOS objects, so it pays no parse and no
+  over geometries that are _already_ GEOS objects, so it pays no parse and no
   encode. A GEOS row is operation-only; every Zig row is operation plus codec.
 - **polyclip-ts and Turf**: prepared geometry → operation → geometry. Turf
   buffers include the projection work described above.

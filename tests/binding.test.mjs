@@ -178,3 +178,158 @@ describe('chaining', () => {
     expect(deep.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('the predicates', () => {
+  const a = square(0, 0, 10);
+  const b = square(5, 5, 10);
+  const far = square(30, 30, 10);
+  const beside = square(10, 0, 10);
+  const inner = square(2, 2, 6);
+
+  test('relate is the DE-9IM matrix as JTS prints it, or a pattern match', () => {
+    expect(geo.relate([a], [b])).toBe('212101212');
+    expect(geo.relate([a], [far])).toBe('FF2FF1212');
+    expect(geo.relate([a], [inner])).toBe('212FF1FF2');
+    expect(geo.relate([a], [b], 'T*T***T**')).toBe(true);
+    expect(geo.relate([a], [far], 'T********')).toBe(false);
+    expect(() => geo.relate([a], [b], 'T*')).toThrow(QdgeoError);
+    expect(() => geo.relate([a], [b], 'T*X******')).toThrow(QdgeoError);
+    // The group extension: one of the marked cells must be non-empty.
+    expect(geo.relate([a], [square(10, 0, 10)], 'AA*AA****')).toBe(true);
+    expect(geo.relate([a], [square(10, 0, 10)], 'FA*AA****')).toBe(true);
+    expect(geo.relate([a], [b], '*********')).toBe(true);
+  });
+
+  test('every named predicate, on the textbook pairs', () => {
+    expect(geo.intersects([a], [b])).toBe(true);
+    expect(geo.intersects([a], [far])).toBe(false);
+    expect(geo.disjoint([a], [far])).toBe(true);
+    expect(geo.contains([a], [inner])).toBe(true);
+    expect(geo.within([inner], [a])).toBe(true);
+    expect(geo.covers([a], [inner])).toBe(true);
+    expect(geo.coveredBy([inner], [a])).toBe(true);
+    expect(geo.touches([a], [beside])).toBe(true);
+    expect(geo.touches([a], [b])).toBe(false);
+    expect(geo.overlaps([a], [b])).toBe(true);
+    expect(
+      geo.crosses([a], {
+        lines: [
+          [
+            [-5, 5],
+            [15, 5],
+          ],
+        ],
+      }),
+    ).toBe(true);
+    expect(geo.equals([a], [square(0, 0, 10)])).toBe(true);
+    expect(geo.equals([a], [b])).toBe(false);
+  });
+
+  test('an operand list may mix points, lines and shapes, told apart by nesting', () => {
+    // A point, a line and a polygon in one list; the polygon contains both.
+    const mixed = [
+      [2, 2],
+      [
+        [1, 1],
+        [3, 3],
+      ],
+      inner,
+    ];
+    expect(geo.contains([a], mixed)).toBe(true);
+    expect(geo.contains([a], [[11, 11]])).toBe(false);
+    // The named form says the same thing.
+    expect(geo.relate([a], mixed)).toBe(
+      geo.relate([a], {
+        points: [[2, 2]],
+        lines: [
+          [
+            [1, 1],
+            [3, 3],
+          ],
+        ],
+        polygons: [inner],
+      }),
+    );
+    // And a result is an operand here too.
+    expect(geo.contains(geo.union([a, b]), [inner])).toBe(true);
+  });
+
+  test('a list is read as a union: a line along the seam of two squares is inside the pair', () => {
+    const seam = {
+      lines: [
+        [
+          [10, 2],
+          [10, 8],
+        ],
+      ],
+    };
+    expect(geo.contains([a, beside], seam)).toBe(true);
+    expect(geo.contains([a], seam)).toBe(false);
+    expect(geo.covers([a], seam)).toBe(true);
+  });
+
+  test('a point in a polygon and a point on a line, the two cases with their own path', () => {
+    // Inside, in a hole, outside, and on an edge — the edge goes back to the
+    // full arrangement, and must give the same kind of answer.
+    const donut = [
+      square(0, 0, 10)[0],
+      [
+        [3, 3],
+        [3, 7],
+        [7, 7],
+        [7, 3],
+        [3, 3],
+      ],
+    ];
+    expect(geo.contains([donut], [[1, 1]])).toBe(true);
+    expect(geo.contains([donut], [[5, 5]])).toBe(false);
+    expect(geo.contains([donut], [[11, 5]])).toBe(false);
+    expect(geo.contains([donut], [[10, 5]])).toBe(false);
+    expect(geo.covers([donut], [[10, 5]])).toBe(true);
+    expect(geo.relate([donut], [[10, 5]])).toBe('FF20F1FF2');
+    // A point on an edge two polygons share is inside their union.
+    expect(geo.contains([a, square(10, 0, 10)], [[10, 5]])).toBe(true);
+    // Along a line: in its interior, at a free end, and where two lines join.
+    const path = {
+      lines: [
+        [
+          [0, 0],
+          [4, 4],
+          [8, 0],
+        ],
+        [
+          [8, 0],
+          [12, 0],
+        ],
+      ],
+    };
+    expect(geo.relate({ points: [[2, 2]] }, path)).toBe('0FFFFF102');
+    expect(geo.relate({ points: [[0, 0]] }, path)).toBe('F0FFFF102');
+    expect(geo.relate({ points: [[8, 0]] }, path)).toBe('0FFFFF102');
+    expect(geo.intersects({ points: [[2, 2.5]] }, path)).toBe(false);
+    expect(geo.touches({ points: [[12, 0]] }, path)).toBe(true);
+    expect(geo.within({ points: [[3, 3]] }, path)).toBe(true);
+  });
+
+  test('invalid input is rejected, the same as for an operation', () => {
+    const flat = [
+      [
+        [0, 0],
+        [5, 0],
+        [10, 0],
+        [0, 0],
+      ],
+    ];
+    expect(() => geo.intersects([a], [flat])).toThrow(QdgeoError);
+    expect(() =>
+      geo.relate([a], {
+        lines: [
+          [
+            [1, 1],
+            [1, 1],
+          ],
+        ],
+      }),
+    ).toThrow(QdgeoError);
+  });
+});

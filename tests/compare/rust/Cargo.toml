@@ -13,6 +13,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 geo = { version = "=0.33.1", default-features = false }
 
+# The predicates are a separate build, so the published union-and-buffer size
+# is still what a page that only needs those two downloads.
+[features]
+predicates = []
+
 [profile.release]
 opt-level = 3
 lto = true
