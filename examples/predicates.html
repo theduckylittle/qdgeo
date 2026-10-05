@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Dan "Ducky" Little -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Predicates example</title>
+<link rel="stylesheet" href="./lib/examples.css" />
+
+<div class="wrap">
+  <h1>Predicates</h1>
+  <p class="lede">
+    The ten named predicates and the DE-9IM matrix they are read from, on a plain
+    <code>&lt;canvas&gt;</code>. Each operand can be a polygon, a line or a point. Drag either one;
+    positions snap to a 10 pixel grid, so edges can line up exactly and the boundary cases —
+    <code>touches</code>, a point on an edge — are reachable by hand. Every answer is exact, so a
+    shape that looks touching but is off by a pixel says so.
+  </p>
+
+  <div class="panel controls">
+    <fieldset>
+      <legend>First</legend>
+      <select id="kind-a">
+        <option value="polygon">Polygon</option>
+        <option value="line">Line</option>
+        <option value="point">Point</option>
+      </select>
+    </fieldset>
+    <fieldset>
+      <legend>Second</legend>
+      <select id="kind-b">
+        <option value="polygon">Polygon</option>
+        <option value="line">Line</option>
+        <option value="point">Point</option>
+      </select>
+    </fieldset>
+    <fieldset>
+      <legend>Arrangement</legend>
+      <select id="scene">
+        <option value="overlap">Polygons overlapping</option>
+        <option value="edge">Polygons sharing an edge</option>
+        <option value="inside">Polygon inside polygon</option>
+        <option value="apart">Polygons apart</option>
+        <option value="across">Line across a polygon</option>
+        <option value="along">Line along an edge</option>
+        <option value="boundary">Point on a boundary</option>
+        <option value="lines">Two lines crossing</option>
+      </select>
+    </fieldset>
+  </div>
+
+  <div class="panel"><canvas id="c" width="960" height="520"></canvas></div>
+  <div class="key">
+    <span><i class="a"></i>First geometry, <code>a</code></span>
+    <span><i class="b"></i>Second geometry, <code>b</code></span>
+  </div>
+
+  <div class="relate">
+    <div class="panel out">
+      <table class="predicates" id="predicates"></table>
+    </div>
+    <div class="panel out">
+      <table class="matrix" id="matrix"></table>
+      <p class="hint" id="matrix-text"></p>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./src/predicates.js"></script>

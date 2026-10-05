@@ -57,7 +57,7 @@ jobs:
 
       - name: Check the pages the site will serve
         run: |
-          for page in index canvas openlayers maplibre leaflet deckgl; do
+          for page in index canvas openlayers maplibre leaflet deckgl predicates; do
             test -s "site/$page.html" || { echo "missing site/$page.html"; exit 1; }
           done
           ls site/assets/*.wasm >/dev/null || {

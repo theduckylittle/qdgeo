@@ -71,7 +71,7 @@ jobs:
           # the module as a hashed asset. `zig build wasm` above put it beside
           # the binding; nothing is copied into place here.
           npm run examples:build
-          for page in index canvas openlayers maplibre leaflet deckgl; do
+          for page in index canvas openlayers maplibre leaflet deckgl predicates; do
             test -s "examples/dist/$page.html" || { echo "missing $page.html"; exit 1; }
           done
           ls examples/dist/assets/*.wasm >/dev/null || {

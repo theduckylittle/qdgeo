@@ -9,8 +9,9 @@
 <div class="wrap landing">
   <h1>qdgeo examples</h1>
   <p class="lede">
-    Buffer and boolean geometry running in WebAssembly. Each page does all four boolean operations
-    and the buffer, with live controls, against the same module.
+    Buffer, boolean geometry and spatial predicates running in WebAssembly. Five pages do all four
+    boolean operations and the buffer, with live controls, and one asks the predicates — all against
+    the same module.
   </p>
   <p class="size">
     The module is one file, 133.5 KB raw and 50.5 KB gzipped, with no host imports.
@@ -47,6 +48,13 @@
       <p>
         Flat typed arrays to the GPU, with no coordinate read or copied on the way —
         <code>qdgeo/deck</code> is the conversion.
+      </p>
+    </a>
+    <a class="card" href="predicates.html">
+      <h2>Predicates</h2>
+      <p>
+        <code>intersects</code>, <code>contains</code>, <code>touches</code> and the rest, with the
+        DE-9IM matrix they come from. Polygons, lines and points, dragged on a canvas.
       </p>
     </a>
     <a class="card" href="api/">

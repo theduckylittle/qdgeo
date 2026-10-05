@@ -128,7 +128,7 @@ setup (venv, `npm ci`, the optional `cargo build --release`) is in
 | `js/` | The npm package: binding, adapters, platform shims |
 | `types/` | Declaration types, generated from the JSDoc (gitignored) |
 | `docs/api/` | TypeDoc API reference, generated from the JSDoc (gitignored) |
-| `examples/` | Five demo pages; also the GitHub Pages site |
+| `examples/` | Six demo pages; also the GitHub Pages site |
 | `tests/` | vitest suites, the JTS cases, the differential suite |
 | `docs/BUFFER_APPROACH.md` | Why the buffer is built the way it is, and the JTS/GEOS comparison |
 
