@@ -6,7 +6,7 @@ Notable changes to qdgeo, newest first. The format follows
 the binding's API and the package's entry points only change with a major
 version.
 
-## Unreleased
+## 1.1.0 — 2026-10-05
 
 - The spatial predicates: `intersects`, `disjoint`, `contains`, `within`,
   `covers`, `coveredBy`, `touches`, `crosses`, `overlaps` and `equals`, and the
