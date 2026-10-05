@@ -44,6 +44,7 @@ export default defineConfig({
         maplibre: resolve(import.meta.dirname, 'maplibre.html'),
         leaflet: resolve(import.meta.dirname, 'leaflet.html'),
         deckgl: resolve(import.meta.dirname, 'deckgl.html'),
+        predicates: resolve(import.meta.dirname, 'predicates.html'),
       },
     },
   },

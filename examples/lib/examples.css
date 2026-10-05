@@ -216,6 +216,43 @@ canvas {
   background: var(--accent);
 }
 
+/* Predicates demo: the named predicates and the matrix, side by side, each
+   true cell marked in the accent colour. */
+
+.relate {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.relate table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.relate th,
+.relate td {
+  text-align: left;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.relate th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.relate tr.yes td,
+.relate td.yes {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.matrix td {
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* Landing page: a narrower column, a larger heading, and the demo cards. */
 
 .wrap.landing {

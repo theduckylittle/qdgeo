@@ -5,8 +5,8 @@ Published from `main` at
 `.github/workflows/pages.yml`, which rebuilds the WASM module first so the live
 site is never running a stale one.
 
-Five pages, built with Vite and importing their dependencies from npm, so they
-look like code someone would actually write. They all do the same four boolean
+Six pages, built with Vite and importing their dependencies from npm, so they
+look like code someone would actually write. Five of them do the same four boolean
 operations and the same buffer, in the same colours and over the same basemap;
 the interesting part is what each host wants geometry to look like, and how much
 work that costs.
@@ -18,6 +18,7 @@ work that costs.
 | `deckgl.html` | deck.gl 9 | The result as **binary**, straight into `SolidPolygonLayer` |
 | `maplibre.html` | MapLibre GL JS 6 | GeoJSON, one of the hosts that genuinely needs the nested form |
 | `leaflet.html` | Leaflet 1.9 | Rings the other way round: **open**, and `[lat, lng]` |
+| `predicates.html` | none | The ten named predicates and the **DE-9IM matrix**, for polygons, lines and points |
 
 That spread is the point. qdgeo returns one coordinate array plus ring and
 polygon ends. OpenLayers keeps exactly that layout and deck.gl is two index
@@ -77,7 +78,7 @@ exception noted in `src/deckgl.jsx` — `DeckGL` forwards `style` and drops
 
 `src/style.js` reads those colour tokens back out and hands them to the hosts in
 whatever form each wants — CSS strings for the map libraries, `[r, g, b]` for
-deck.gl — along with the shared OpenStreetMap basemap. It is why the five pages
+deck.gl — along with the shared OpenStreetMap basemap. It is why the six pages
 look like one project and follow the light and dark themes together.
 
 `src/shapes.js` generates the two operands.
@@ -123,6 +124,17 @@ the longer input form:
 ```js
 geo.buffer({ points: [[7, -3]] }, 10); // a disc
 geo.buffer({ lines: [[[0, 0], [100, 0]]] }, 10); // a stadium
+```
+
+The predicates take the same operands and return a boolean. `relate` with no
+pattern returns the DE-9IM matrix every one of them is read from, and
+`predicates.html` shows all of them at once:
+
+```js
+geo.intersects([a], [b]); // true
+geo.touches([a], { points: [[10, 5]] }); // true: the point is on a's edge
+geo.relate([a], [b]); // '212101212'
+geo.relate([a], [b], 'T*****FF*'); // false: contains, asked as a pattern
 ```
 
 `apply(op, a, b, options)` is the generic form the named methods are built on,

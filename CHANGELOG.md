@@ -22,6 +22,8 @@ version.
   to 173.9 KB raw, 66.5 KB gzipped.
 - Operand lists may mix geometries, told apart by nesting: `[x, y]`,
   `[[x, y], …]`, `[[[x, y], …], …]`.
+- A predicates demo page, `predicates.html`: polygons, lines and points dragged
+  on a canvas, with all ten predicates and the DE-9IM matrix updating live.
 - The ten JTS predicate case files, run verbatim: 330 of 330 assertions pass.
 - Fixed before release: `relate` trapped on a probe far outside the other
   operand's polygons (a long line reaching a distant polygon), and `crosses`,
