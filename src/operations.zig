@@ -63,7 +63,7 @@ pub fn boolean(
     var segments: usize = 0;
     try normalize(sa, &paths, &segments, subject, options.limits.max_segments, 0);
     try normalize(sa, &paths, &segments, clip, options.limits.max_segments, 1);
-    return sweep.execute(a, paths.items, mode, options.limits);
+    return sweep.execute(a, paths.items, mode, options.limits, .crossings);
 }
 
 /// N-ary union: everything is one operand, so overlapping input simply stacks.
@@ -268,5 +268,5 @@ pub fn buffer(a: std.mem.Allocator, input: BufferInput, distance: f64, options: 
     if (paths.items.len == 0) return .{ .arena = std.heap.ArenaAllocator.init(a), .polygons = &.{} };
     var limits = options.limits;
     limits.max_segments = limits.max_generated_segments;
-    return sweep.execute(a, paths.items, .union_all, limits);
+    return sweep.execute(a, paths.items, .union_all, limits, .none);
 }

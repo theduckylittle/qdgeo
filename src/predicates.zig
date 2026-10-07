@@ -57,7 +57,14 @@ pub fn orient(a: g.Coordinate, b: g.Coordinate, c: g.Coordinate) i2 {
     // A degenerate triple is the overwhelmingly common filter failure on real
     // data: adjacent rings share vertices, so two of the three points are
     // bit-identical and the determinant is exactly zero. Two compares answer it.
-    if (@reduce(.And, u == @as(g.V2, @splat(0))) or @reduce(.And, v == @as(g.V2, @splat(0))) or @reduce(.And, u == v)) {
+    //
+    // `u` and `v` are differences from `c`, and a difference of two floats is
+    // zero only when they are equal, so testing them against zero is testing
+    // the points. `u == v` is not: both are rounded, and two points an ulp
+    // apart, far from `c`, round to the same difference. That called
+    // (-5.4e-16, -50), (0, -50), (10, -60) collinear, and ring assembly
+    // dropped the vertex and the ring with it. Compare `a` and `b` themselves.
+    if (@reduce(.And, u == @as(g.V2, @splat(0))) or @reduce(.And, v == @as(g.V2, @splat(0))) or g.equal(a, b)) {
         return 0;
     }
     var expansion: Expansion = .{};
