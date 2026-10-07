@@ -698,6 +698,108 @@ const Shapes = struct {
     }
 };
 
+fn xy(x: f64, y: f64) geo.Coordinate {
+    return .{ .x = x, .y = y };
+}
+
+// The overlay cases below are the reduced forms of failures a fuzz corpus of
+// digitized-style polygons found in 1.1.0 (`tests/compare/fuzz.py`). Every
+// one of them was a wrong answer handed back as a right one — invalid rings,
+// or valid rings around the wrong region — and every expected area is GEOS's,
+// which the exact-arithmetic adjudication in that script agrees with.
+
+test "orient compares points, not rounded differences from the third" {
+    // a and b are 5e-16 apart and 14 units from c, so a - c and b - c round
+    // to the same pair. The shortcut for bit-identical points used to compare
+    // those differences and call this triple collinear, and ring assembly then
+    // dropped a vertex and the ring with it.
+    const pred = @import("predicates.zig");
+    try std.testing.expectEqual(@as(i2, 1), pred.orient(xy(0, -50), xy(-5e-16, -50), xy(10, -60)));
+    try std.testing.expectEqual(@as(i2, -1), pred.orient(xy(-5e-16, -50), xy(0, -50), xy(10, -60)));
+    try std.testing.expectEqual(@as(i2, 0), pred.orient(xy(0, -50), xy(0, -50), xy(10, -60)));
+}
+
+test "overlay: a closing tests the pair it brings together, not one an opening shifted into place" {
+    // The segments that open at a point go in before the gap the closings
+    // left is tested, and one opening below the gap moved every index above
+    // it — so the gap test compared the wrong pair and two crossings were
+    // never noded. The union came back self-intersecting, area 1077.44.
+    const t1 = [_]geo.Coordinate{ xy(15, 90), xy(5, 45), xy(-5, -45), xy(15, 90) };
+    const t2 = [_]geo.Coordinate{ xy(-30, 80), xy(-0.5555555555555556, 50.55555555555556), xy(35, 55), xy(-30, 80) };
+    const t3 = [_]geo.Coordinate{ xy(-5, 50), xy(110, -60), xy(-0.5555555555555556, 50.55555555555556), xy(-5, 50) };
+    var rings = [_]geo.LinearRing{ &t1, &t2, &t3 };
+    const polygons = [_]geo.Polygon{ .{ .rings = rings[0..1] }, .{ .rings = rings[1..2] }, .{ .rings = rings[2..3] } };
+    var out = try geo.unionAll(a, &polygons, .{});
+    defer out.deinit();
+    try std.testing.expectApproxEqAbs(1046.9292931260045, area(out.polygons), 1e-9);
+}
+
+test "overlay: windings are read again when a split lands on the point just swept" {
+    // b's edge passes exactly through a's vertex (45, -10), which is only
+    // found by the crossing tests after a's edges went in on top of it. They
+    // kept the winding they read from it, and the intersection came back as
+    // the whole of a, area 8.33.
+    var sa: Shapes = .{};
+    var sb: Shapes = .{};
+    const ta = [_]geo.Coordinate{ xy(45, -10), xy(45, -6.666666666666667), xy(50, -10), xy(45, -10) };
+    const tb = [_]geo.Coordinate{ xy(49.6, -5.4), xy(30, -25), xy(80, 140), xy(49.6, -5.4) };
+    var out = try geo.boolean(a, sa.one(&ta).polygons, sb.one(&tb).polygons, .intersection, .{});
+    defer out.deinit();
+    try std.testing.expectApproxEqAbs(3.333333333333333, area(out.polygons), 1e-9);
+}
+
+test "overlay: openings that leave the queue out of order, and a vertex an ulp off a line" {
+    // Two segments opening at a rounded crossing came out of the event heap
+    // top first, and the vertex (-5.4e-16, -50) was then judged collinear by
+    // `orient`. The difference came back empty.
+    var sa: Shapes = .{};
+    var sb: Shapes = .{};
+    const ta = [_]geo.Coordinate{ xy(10, -60), xy(-6.521739130434782, -43.47826086956522), xy(-1.949685534591195, -38.490566037735846), xy(10, -60) };
+    const tb = [_]geo.Coordinate{ xy(10, -50), xy(0, -50), xy(-60, -50), xy(10, 70), xy(10, -50) };
+    var out = try geo.boolean(a, sa.one(&ta).polygons, sb.one(&tb).polygons, .difference, .{});
+    defer out.deinit();
+    try std.testing.expectApproxEqAbs(22.222222222222232, area(out.polygons), 1e-9);
+}
+
+test "overlay: a lost crossing between operands that would flip an edge is declined" {
+    // b's edge passes within half an ulp of a's vertex (41, 9), so the
+    // crossing rounds to a point before a's edge begins and a's edge is
+    // inserted on the wrong side of b for its whole length. The difference
+    // dropped the piece at (83, -16), area 434.80 against 678.87.
+    var sa: Shapes = .{};
+    var sb: Shapes = .{};
+    const ta = [_]geo.Coordinate{ xy(1, 82), xy(41, 9), xy(83, -16), xy(1, 82) };
+    const tb = [_]geo.Coordinate{ xy(75, 20), xy(49.296875, 5.3125), xy(-31.21951219512195, 41.09756097560975), xy(75, 20) };
+    var out = try geo.boolean(a, sa.one(&ta).polygons, sb.one(&tb).polygons, .difference, .{});
+    defer out.deinit();
+    try std.testing.expectApproxEqAbs(678.8706444878115, area(out.polygons), 1e-9);
+}
+
+test "overlay: result edges that cross are declined, and the graph labelling is not asked" {
+    // Dividing a segment rotates its supporting line by a rounding step, and
+    // here that put a vertex the sweep had already passed on the other side
+    // of it: a crossing behind the sweep line. The sweep labelling assembled
+    // crossing rings, and the graph labelling, asked next, labelled an
+    // arrangement with a crossing and no node in it. Both now decline and the
+    // re-noding pass answers.
+    const shell = [_]geo.Coordinate{ xy(-20, -130), xy(-160, -20), xy(-10, 110), xy(-20, -130) };
+    const hole = [_]geo.Coordinate{ xy(-70, -10), xy(-80, 20), xy(-86.66666666666667, 6.666666666666667), xy(-70, -10) };
+    const tri = [_]geo.Coordinate{ xy(-75, -10), xy(-85, 5), xy(40, 60), xy(-75, -10) };
+    var rings = [_]geo.LinearRing{ &shell, &hole, &tri };
+    const polygons = [_]geo.Polygon{ .{ .rings = rings[0..2] }, .{ .rings = rings[2..3] } };
+    var out = try geo.unionAll(a, &polygons, .{});
+    defer out.deinit();
+    try std.testing.expectApproxEqAbs(17515.070399214415, area(out.polygons), 1e-9);
+
+    // And where no pass can node it — a vertex within an ulp of the other
+    // triangle's edge — the answer is the precision error, not invalid rings.
+    const t1 = [_]geo.Coordinate{ xy(-40, 30), xy(-50, 50), xy(48.75, 48.75), xy(-40, 30) };
+    const t2 = [_]geo.Coordinate{ xy(-50, 40), xy(-36.666666666666664, 26.666666666666668), xy(50, -70), xy(-50, 40) };
+    var pair = [_]geo.LinearRing{ &t1, &t2 };
+    const both = [_]geo.Polygon{ .{ .rings = pair[0..1] }, .{ .rings = pair[1..2] } };
+    try std.testing.expectError(error.UnnodableCrossing, geo.unionAll(a, &both, .{}));
+}
+
 test "relate: the matrix for the textbook polygon cases, in JTS's order" {
     const unit = rect(0, 0, 10, 10);
     const inner = rect(2, 2, 8, 8);

@@ -45,6 +45,26 @@ pub const Labelling = enum {
     graph,
 };
 
+/// Whether `execute` checks its answer before handing it back.
+pub const Check = enum {
+    /// Sweep the result edges once more and decline an answer whose edges
+    /// cross. A divided segment's supporting line moves by a rounding step,
+    /// and a vertex the sweep has already passed can end up on the other side
+    /// of it — a crossing behind the sweep line, which the sweep never looks
+    /// at again. The labelling can still assemble that arrangement, into
+    /// rings that cross: invalid output handed back as valid. Declining sends
+    /// it to the re-noding pass, which finds exactly those crossings, or to
+    /// `UnnodableCrossing` when that cannot. A boolean result keeps a few
+    /// percent of the arrangement's edges — 2,636 of 133,523 on the
+    /// 4,040-parcel union — so this costs about 2% there, and nothing at all
+    /// when the sweep divided nothing.
+    crossings,
+    /// Trust the assembly. Buffer: its result keeps nearly every edge, so the
+    /// check would cost a second sweep, and 10,000 buffers of the fuzz corpus
+    /// that finds these crossings for the booleans produced none.
+    none,
+};
+
 pub const Path = g.Path;
 pub const Mode = g.Mode;
 pub const Limits = g.Limits;
@@ -109,6 +129,28 @@ const Engine = struct {
     /// segments. Every one of them is a hole in the arrangement that no further
     /// noding pass can close.
     lost: usize = 0,
+    /// Lost crossings between the two operands that would change the answer.
+    /// A crossing with no node leaves the two segments in the order they had
+    /// before it for the rest of their length, so each keeps the winding it
+    /// cached below itself on the wrong side of the other. When that flips
+    /// either one between result edge and not, the labelling hands back a
+    /// valid-looking wrong answer — a difference that dropped a whole piece —
+    /// so both labellings decline. See `misordered`.
+    ///
+    /// Only crossings between operands are counted. Within one operand the
+    /// same test fires on the residual crossings of the 1,000- and
+    /// 4,040-parcel unions, and counting them there turned both into errors.
+    /// Those are real: counted exactly, a piece 84 m long there has a winding
+    /// of 1 below it where the sweep cached 2, because its neighbour parcel's
+    /// edge runs 2e-9 m away and the stale order closes the 2 nm crack between
+    /// them — which is also what GEOS answers, by snapping, to a symmetric
+    /// difference of 0. Telling that crack from a wedge worth keeping would
+    /// take a size threshold, and there are none here. The cost is measured:
+    /// one union in 30,000 fuzzed operations comes back valid but wrong, the
+    /// `overlay` baseline in `tests/compare/fuzz.py`. What is wrong within
+    /// one operand and *also* invalid shows up as crossing result edges,
+    /// which `Check.crossings` catches.
+    misorders: usize = 0,
     p: std.ArrayList(g.Coordinate) = .empty,
     e: std.ArrayList(Event) = .empty,
     /// Events known before the sweep starts, sorted once. Subdivision events go
@@ -309,6 +351,11 @@ const Engine = struct {
     /// Winding immediately below the newly inserted segment. Anything it
     /// overlaps is skipped, then the run underneath contributes every one of
     /// its deltas, because a run's members all share one lower region.
+    ///
+    ///
+    /// `reenter` is its only caller, and that is kept so on purpose: with a
+    /// second, the WASM build stops inlining it, which measured 3-5% on every
+    /// buffer, and forcing it `inline` instead cost 7 KB of artifact.
     fn enter(en: *Engine, id: u32, at: usize) void {
         var k = at;
         while (k > 0 and en.shares(en.status.items[k - 1], id)) k -= 1;
@@ -327,6 +374,34 @@ const Engine = struct {
         }
         ev.below = below;
         ev.prev = en.status.items[k - 1];
+    }
+
+    /// Set the winding below every segment that starts at `key`, bottom to top
+    /// so each reads a predecessor that is already right. Run once the batch's
+    /// openings are all in, and never per insertion, for two reasons.
+    ///
+    /// Openings do not always arrive bottom to top. The initial events are
+    /// sorted, but a queued subdivision event is ordered by its segment's far
+    /// end, and a later split can move that end while it waits — so the lower
+    /// of two segments can come out of the heap second, after the upper one
+    /// read its winding from a line without it.
+    ///
+    /// And a point can be swept twice. A segment passing straight through it
+    /// is only found to do so by the crossing tests that run after the
+    /// insertions, and dividing it there queues a second batch at the same
+    /// point, whose continuation may belong above segments that already read
+    /// their winding with it below. Those are re-entered with the new ones.
+    ///
+    /// Every segment starting at one point is contiguous in the status line —
+    /// anything else passes above or below the point, or through it and is
+    /// divided there — so the block is found from `from`, the position of one
+    /// segment in it.
+    fn reenter(en: *Engine, key: u128, from: usize) void {
+        const status = en.status.items;
+        var low = from;
+        while (low > 0 and en.e.items[status[low - 1]].key == key) low -= 1;
+        var k = low;
+        while (k < status.len and en.e.items[status[k]].key == key) : (k += 1) en.enter(status[k], k);
     }
 
     fn sameSegment(en: *const Engine, i: u32, j: u32) bool {
@@ -360,6 +435,34 @@ const Engine = struct {
         const carrier = &en.e.items[en.status.items[high]];
         carrier.carries = true;
         carrier.transition = if (inside_above == inside_below) 0 else if (inside_above) @as(i8, 1) else -1;
+    }
+
+    /// Would swapping two neighbours in the status line — which is what their
+    /// true order does past a crossing that has no node — change whether
+    /// either one is a result edge?
+    ///
+    /// Below both of them the winding is the lower one's `below`. Past the
+    /// crossing the old upper segment sits directly on that, and the old
+    /// lower one sits on that plus the old upper's delta.
+    ///
+    /// The caller passes the order rather than this asking `segmentLess`.
+    /// A second caller of `segmentLess` is enough for the WASM build to stop
+    /// inlining it into the status-line searches, which measured 13% on the
+    /// 4,040-parcel union for a function that almost never runs.
+    fn misordered(en: *const Engine, low: u32, high: u32) bool {
+        const lower = en.e.items[low];
+        const upper = en.e.items[high];
+        const base = lower.below;
+        const lifted: [2]i32 = .{ base[0] + upper.delta[0], base[1] + upper.delta[1] };
+        const before_upper: [2]i32 = .{ base[0] + lower.delta[0], base[1] + lower.delta[1] };
+        return en.edge(before_upper, upper.delta) != en.edge(base, upper.delta) or
+            en.edge(base, lower.delta) != en.edge(lifted, lower.delta);
+    }
+
+    /// Whether a segment with this winding below it and this delta is a
+    /// result edge.
+    fn edge(en: *const Engine, below: [2]i32, delta: [2]i32) bool {
+        return en.filled(below) != en.filled(.{ below[0] + delta[0], below[1] + delta[1] });
     }
 
     /// Does this segment already have, or can it be given, a vertex at `key`?
@@ -410,7 +513,8 @@ const Engine = struct {
         while (k <= high) : (k += 1) try en.divideOne(en.status.items[k], x, key);
     }
 
-    fn possibleIntersection(en: *Engine, i: u32, j: u32, a1: g.Coordinate, b1: g.Coordinate, a2: g.Coordinate, b2: g.Coordinate) !void {
+    /// `j_above` says which of the two the status line has on top.
+    fn possibleIntersection(en: *Engine, i: u32, j: u32, j_above: bool, a1: g.Coordinate, b1: g.Coordinate, a2: g.Coordinate, b2: g.Coordinate) !void {
         try en.tick();
         if (!g.Extent.of(a1, b1).overlaps(g.Extent.of(a2, b2))) return;
         const o1 = pred.orient2(a1, b1, a2, b2);
@@ -443,7 +547,11 @@ const Engine = struct {
             // Counting them is what lets `execute` tell "try again" from
             // "f64 cannot hold this arrangement" — see `Unnodable`.
             const key = keyOf(canonical(x));
-            if (!en.covers(i, key) or !en.covers(j, key)) en.lost += 1;
+            if (!en.covers(i, key) or !en.covers(j, key)) {
+                en.lost += 1;
+                if (en.e.items[i].layer != en.e.items[j].layer and
+                    (if (j_above) en.misordered(i, j) else en.misordered(j, i))) en.misorders += 1;
+            }
             try en.divide(i, x);
             try en.divide(j, x);
             return;
@@ -457,22 +565,22 @@ const Engine = struct {
     }
 
     /// Test one segment against a whole run of neighbours, with both sides'
-    /// geometry snapshotted first.
-    fn against(en: *Engine, id: u32, low: usize, high: usize) !void {
+    /// geometry snapshotted first. `above` says which side of it the run is.
+    fn against(en: *Engine, id: u32, low: usize, high: usize, above: bool) !void {
         const from = en.p.items[id];
         const to = en.p.items[en.e.items[id].other];
         var k = low;
         while (k <= high) : (k += 1) {
             const other = en.status.items[k];
             if (other == id) continue;
-            try en.possibleIntersection(id, other, from, to, en.p.items[other], en.p.items[en.e.items[other].other]);
+            try en.possibleIntersection(id, other, above, from, to, en.p.items[other], en.p.items[en.e.items[other].other]);
         }
     }
 
     fn neighbours(en: *Engine, id: u32) !void {
         const at = en.statusFind(id) catch return;
-        if (at + 1 < en.status.items.len) try en.against(id, at + 1, en.runEnd(at + 1));
-        if (at > 0) try en.against(id, en.runStart(at - 1), at - 1);
+        if (at + 1 < en.status.items.len) try en.against(id, at + 1, en.runEnd(at + 1), true);
+        if (at > 0) try en.against(id, en.runStart(at - 1), at - 1, false);
     }
 
     /// One sweep position at a time: every event sharing a point is closed, then
@@ -500,16 +608,28 @@ const Engine = struct {
                 _ = en.status.orderedRemove(at);
                 gap = @min(gap, at);
             }
-            // Opened bottom to top, matching the event order, so each new entry
-            // sees the predecessor it will keep.
+            // The segment under the gap the closings left. The openings go in
+            // first, and each one inserted at or below it moves it up a place,
+            // so `gap - 1` would name the wrong segment by the time the gap is
+            // tested. Testing that wrong pair misses the crossing between the
+            // two segments the gap really brought together, and the graph
+            // labelling then reads an arrangement with a crossing and no node
+            // in it.
+            var under: usize = if (gap != none and gap > 0 and gap < en.status.items.len) gap - 1 else none;
+            // Positions come from `statusSeek` and do not depend on the order
+            // the openings arrive in; windings do, and `reenter` sets them for
+            // the whole block once it is in.
+            var lowest: usize = none;
             for (opened.items) |id| {
                 const at = en.statusSeek(id);
                 try en.status.insert(en.a, at, id);
-                en.enter(id, at);
+                if (under != none and at <= under) under += 1;
+                if (lowest == none or at <= lowest) lowest = at;
             }
+            if (lowest != none) en.reenter(key, lowest);
             for (opened.items) |id| try en.neighbours(id);
-            if (gap != none and gap > 0 and gap < en.status.items.len) {
-                try en.against(en.status.items[gap - 1], gap, en.runEnd(gap));
+            if (under != none and under + 1 < en.status.items.len) {
+                try en.against(en.status.items[under], under + 1, en.runEnd(under + 1), true);
             }
         }
     }
@@ -670,9 +790,9 @@ fn sortEvents(en: *const Engine, a: A, ids: []u32) !void {
 /// see `Labelling` — and a `NodingFailure` is the exact signal that the first
 /// answer was unusable, so retrying on it costs nothing on the paths that work
 /// and rescues the ones that do not.
-pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometry {
+pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits, check: Check) !g.Geometry {
     var lost: usize = 0;
-    if (try attempt(a, paths, mode, limits, &lost)) |done| return done;
+    if (try attempt(a, paths, mode, limits, check, &lost)) |done| return done;
 
     // Every crossing that sweep found is an endpoint now, so sweeping the
     // arrangement again is left with only the ones rounding moved off a segment
@@ -688,7 +808,7 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
     const renoded = try renodeOnce(a, scratch.allocator(), paths, mode, limits);
-    if (try attempt(a, renoded, mode, limits, &lost)) |done| return done;
+    if (try attempt(a, renoded, mode, limits, check, &lost)) |done| return done;
     // `lost` does earn its keep here: it separates "f64 cannot hold this
     // arrangement" from "the algorithm is wrong", which is the difference
     // between a known limit and a bug worth chasing.
@@ -697,9 +817,17 @@ pub fn execute(a: A, paths: []const Path, mode: Mode, limits: Limits) !g.Geometr
 
 /// Both labellings on one arrangement. Null means neither could assemble it.
 /// `lost` comes back with the crossings the noding could not place a vertex on.
-fn attempt(a: A, paths: []const Path, mode: Mode, limits: Limits, lost: *usize) !?g.Geometry {
+fn attempt(a: A, paths: []const Path, mode: Mode, limits: Limits, check: Check, lost: *usize) !?g.Geometry {
     for ([_]Labelling{ .sweep, .graph }) |how| {
-        return overlay(a, paths, mode, limits, how, lost) catch |err| switch (err) {
+        // The wedge model is exact only on an exact arrangement. A lost
+        // crossing is one with no node on it, and there the graph labelling
+        // can still assemble — into rings that cross, or that enclose the
+        // wrong side. That is a wrong answer handed back as a right one, so
+        // it is not asked; the re-noding pass or `UnnodableCrossing` answers.
+        // Both labellings sweep the same arrangement, so the count the sweep
+        // labelling left is the one that applies.
+        if (how == .graph and lost.* != 0) return null;
+        return overlay(a, paths, mode, limits, how, check, lost) catch |err| switch (err) {
             error.NodingFailure => continue,
             else => err,
         };
@@ -791,7 +919,7 @@ fn load(en: *Engine, sa: A, paths: []const Path, limits: Limits) !?[]u32 {
     return order;
 }
 
-fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Labelling, lost: *usize) !g.Geometry {
+fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Labelling, check: Check, lost: *usize) !g.Geometry {
     lost.* = 0;
     var result: g.Geometry = .{ .arena = std.heap.ArenaAllocator.init(a), .polygons = &.{} };
     errdefer result.deinit();
@@ -804,6 +932,8 @@ fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Lab
     const order = try load(&en, sa, paths, limits) orelse return result;
     try en.sweep();
     lost.* = en.lost;
+    // Either labelling would answer this arrangement wrongly; see `misorders`.
+    if (en.misorders != 0) return error.NodingFailure;
     if (labelling == .graph) try relabel(&en, sa);
 
     // Result segments, in sweep order, so every contour is created before any
@@ -833,6 +963,15 @@ fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Lab
             .{ .ends = .{ head, tail }, .event = id }
         else
             .{ .ends = .{ tail, head }, .event = id };
+    }
+    // With nothing divided, every line is where the input put it and the sweep
+    // tested every pair that can cross, so there is nothing to look for.
+    const divided = en.e.items.len != order.len;
+    if (check == .crossings and divided and try crossed(a, edges, vertices.coordinates(), limits)) {
+        // A crossing between result edges is a crossing in the arrangement
+        // with no node on it, the same thing `lost` counts, found late.
+        lost.* += 1;
+        return error.NodingFailure;
     }
     const fan = try Fan.build(sa, edges, vertices.coordinates());
     for (0..vertices.coordinates().len) |v| {
@@ -929,6 +1068,26 @@ fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Lab
     }
     result.polygons = output;
     return result;
+}
+
+/// Do any two result edges cross? Sweeping them alone finds every crossing
+/// the labelled arrangement still has, and `divide` creates an event for each
+/// one, so any growth in the event list is a crossing.
+fn crossed(a: A, edges: []const Edge, points: []const g.Coordinate, limits: Limits) !bool {
+    var inner = std.heap.ArenaAllocator.init(a);
+    defer inner.deinit();
+    const ia = inner.allocator();
+    const ends = try ia.alloc(g.Coordinate, 2 * edges.len);
+    const paths = try ia.alloc(Path, edges.len);
+    for (edges, paths, 0..) |edge, *path, k| {
+        ends[2 * k] = points[edge.ends[0]];
+        ends[2 * k + 1] = points[edge.ends[1]];
+        path.* = .{ .points = ends[2 * k ..][0..2] };
+    }
+    var en: Engine = .{ .a = ia, .limits = limits, .mode = .union_all };
+    const order = try load(&en, ia, paths, limits) orelse return false;
+    try en.sweep();
+    return en.e.items.len != order.len or en.lost != 0;
 }
 
 /// Deduplicated vertices: two endpoints are the same vertex exactly when their
