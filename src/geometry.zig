@@ -42,6 +42,10 @@ pub const Mode = enum {
     /// In the first operand and not the second.
     difference,
     symmetric_difference,
+    /// Wound around at all, in either direction. Not a boolean operation:
+    /// `makeValid` sweeps one ring at a time under it, so a bowtie keeps both
+    /// lobes and a loop that re-covers the body leaves no hole.
+    nonzero,
 
     pub fn covers(mode: Mode, winding: [2]i32) bool {
         const subject = winding[0] > 0;
@@ -51,6 +55,7 @@ pub const Mode = enum {
             .intersection => subject and clip,
             .difference => subject and !clip,
             .symmetric_difference => subject != clip,
+            .nonzero => winding[0] != 0,
         };
     }
 };

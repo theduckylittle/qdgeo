@@ -7,15 +7,17 @@ gets generated from them. The root `CLAUDE.md` covers the project;
 ## The binding is the library, not an example
 
 **`js/qdgeo.js` is part of the published package.** Its named methods —
-`union`, `intersection`, `difference`, `symmetricDifference`, `buffer`, and
-the predicates `intersects`, `disjoint`, `contains`, `within`, `covers`,
+`union`, `intersection`, `difference`, `symmetricDifference`, `buffer`,
+`makeValid`, and the predicates `intersects`, `disjoint`, `contains`, `within`, `covers`,
 `coveredBy`, `touches`, `crosses`, `overlaps`, `equals` and `relate` — are
 what a caller should reach for; `apply` is the generic escape hatch. The binary
 methods take two operand lists and compute the module's operand split
 themselves, so the split never reaches a caller. One marshaller, `#marshal`,
 writes both operands' points, lines and polygons in the block's fixed order and
 hands back the first operand's three counts; `apply` uses the polygon count and
-`geom_relate` all three.
+`geom_relate` all three. The marshaller copies rings as given and validates
+nothing, which is what lets `makeValid` see an open ring or a `NaN` vertex
+exactly as the host wrote it; keep it that way.
 
 An operand list may mix kinds, told apart by nesting depth — `[x, y]` a point,
 `[[x, y], …]` a line, `[[[x, y], …], …]` or a flat `{ coordinates, ringEnds }`

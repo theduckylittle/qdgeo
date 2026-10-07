@@ -6,6 +6,53 @@ Notable changes to qdgeo, newest first. The format follows
 the binding's API and the package's entry points only change with a major
 version.
 
+## 1.2.0 — 2026-10-07
+
+- `makeValid`: repairs invalid polygons, on request, with JTS's
+  `GeometryFixer` rules. A ring covers everything it winds around in either
+  direction, so a bowtie keeps both lobes and a loop that re-covers the shape
+  leaves no hole; each ring is repaired alone; a hole is cut where it meets the
+  shell and kept as a polygon where it does not; a collection's repaired
+  polygons are unioned. Open rings are closed, `NaN` vertices removed, repeated
+  ones merged, and parts with no area dropped. Exact, with no snapping. Op code
+  5 through the existing `geom_apply`, so no new export; `geo.makeValid` in the
+  binding and `makeValid` in Zig. Against Shapely's
+  `make_valid(method='structure')` on 20,000 fuzzed hand-drawn polygons, 19,977
+  agree and 21 are `UNREPRESENTABLE`; valid input comes back unchanged.
+- **Fixed: four overlay defects that returned wrong geometry as if it were
+  right**, in every release before this one, on valid input. None showed on
+  the parcel data; all four on edited-style geometry, where vertices sit a few
+  ulps off other edges. On 30,000 fuzzed union, intersection and difference
+  calls, adjudicated in exact arithmetic, 1.1.0 is wrong 24 times — 5 of them
+  invalid output — and 1.2.0 once.
+  - `orient` judged two points collinear with a third whenever their rounded
+    differences from it matched, so points an ulp apart far from it were
+    "collinear", and ring assembly dropped the ring. A difference of two
+    triangles came back empty instead of 22.2.
+  - The sweep tested the wrong pair across the gap closings leave when an
+    opening below shifted the status line, leaving crossings unnoded: a union
+    of three valid triangles came back self-intersecting, area 1077 for 1047.
+  - Cached windings went stale when a segment was split at the point just
+    swept, or when two openings left the event queue out of order: an
+    intersection came back as the whole first operand.
+  - Splitting a segment rotates it by a rounding step, which can make a
+    crossing behind the sweep line; and a crossing lost to rounding could
+    leave two operands' edges in the wrong order. Both assembled wrong answers.
+    Boolean results are now checked for crossing edges, lost crossings between
+    operands are checked for consequence, and the graph labelling is never
+    used on an arrangement with a lost crossing. Each declines to the
+    re-noding pass, or to `UNREPRESENTABLE`.
+- The one case left, measured and documented: a vertex within half an ulp of
+  another polygon's edge in the **same** operand can still leave a union valid
+  but wrong — once in 30,000 fuzzed calls.
+- Speed: unions are 3-5% slower than 1.1.0 and buffers 1-4%, measured
+  interleaved in one process, mostly the result check. The artifact is 182.3 KB
+  raw and 69.5 KB gzipped, up 8.4 KB and 3.0 KB.
+- `tests/compare/fuzz.py`: the edited-geometry fuzz, with an exact referee and
+  recorded baselines, now part of the correctness sweep.
+- The README's "Invalid input" section now says what the operations check —
+  structure — and what they do not — topology, read by winding as JSTS's
+  `buffer(0)` reads it.
 ## 1.1.0 — 2026-10-05
 
 - The spatial predicates: `intersects`, `disjoint`, `contains`, `within`,

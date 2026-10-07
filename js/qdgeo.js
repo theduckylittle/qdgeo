@@ -17,6 +17,7 @@ export const OP = {
   difference: 2,
   symmetricDifference: 3,
   buffer: 4,
+  makeValid: 5,
 };
 
 /**
@@ -418,6 +419,32 @@ export class Geometry {
     const settings = typeof distance === 'object' && distance !== null ? distance : options;
     const metres = typeof distance === 'number' ? distance : (settings?.distance ?? 0);
     return this.apply(OP.buffer, shapes, [], { ...settings, distance: metres });
+  }
+
+  /**
+   * Repair `shapes` into valid polygons. This is the only method that
+   * repairs anything: every other one rejects invalid input or reads it as
+   * given, so call this first on geometry that may be broken — a polygon
+   * someone digitized by hand, say.
+   *
+   * The rules are JTS's `GeometryFixer`. A ring covers everything it winds
+   * around in either direction, so a bowtie keeps both lobes and a loop that
+   * re-covers the shape leaves no hole. Each ring is repaired on its own. A
+   * hole that meets its shell is cut from it, and a hole wholly outside
+   * becomes a polygon. The repaired polygons are unioned. Non-finite
+   * vertices are removed, repeated ones merged and open rings closed. Parts
+   * with no area left, like a spike, are dropped, so the result is always
+   * polygons.
+   *
+   * Nothing is snapped, so the rare crossing that `f64` cannot hold still
+   * throws `'UNREPRESENTABLE'`, as it does for `union`.
+   *
+   * @param shapes {Operand}
+   * @param [options] {Options} a nonzero `distance` buffers the result
+   * @returns {Result}
+   */
+  makeValid(shapes, options) {
+    return this.apply(OP.makeValid, shapes, [], options);
   }
 
   /**

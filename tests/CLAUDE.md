@@ -92,6 +92,33 @@ enough to change conclusions — qdgeo and Rust Geo are the only symmetric pair.
 Every reduced failure is committed under `fixtures/` and re-probed by
 `probes.py`. Everything under `generated/` is gitignored build output.
 
+## `tests/compare/fuzz.py` — edited geometry, settled exactly
+
+The parcel corpora are clean data, and four overlay defects shipped through
+1.1.0 because of it. This generates what edited data looks like — rings with
+twists, backtracks, spikes, overshoots and holes in the wrong places, half on
+integer grids — and runs it two ways:
+
+- `fuzz.py overlay` makes two valid operands from GEOS's repair of generated
+  polygons, so they are valid and full of vertices at rounded crossings, and
+  runs union, intersection and difference.
+- `fuzz.py make-valid` runs `makeValid` against Shapely's
+  `make_valid(method='structure')`.
+
+Every disagreement with GEOS is **adjudicated**, the same idea as the boundary
+metric: a point inside each region the two answers disagree on is located
+against the original input with `fractions.Fraction`, and the side that has it
+wrong is counted. GEOS is wrong in some of them. Only qdgeo's wrong answers
+fail the run, against a baseline at the default seed: **1** for `overlay` (the
+same-operand case `src/CLAUDE.md` describes) and **0** for `make-valid`.
+`UNREPRESENTABLE` is not wrong. Where the rule's answer depends on rounding — a
+hole meeting its shell only through a sliver — it is counted separately and
+neither side is blamed.
+
+`--show` prints every input qdgeo got wrong, as WKT that round-trips, ready to
+reduce. Reduce against the exact referee, never against "differs from GEOS":
+a reduction against GEOS drifts into GEOS's own bugs, which happened.
+
 ## Updating the published comparison
 
 Use the **`compare` skill** (`.claude/skills/compare/`). It encodes the two
@@ -117,6 +144,8 @@ runner. Run `npm run compare` locally before claiming a performance change.
   a check that the relevant JTS case passes.
 - A parcel-data failure gets reduced and committed under
   `tests/compare/fixtures/`, then probed.
+- A fuzz failure gets reduced against the exact referee and becomes a case in
+  `src/tests.zig`, with the expected area in the comment.
 - Test data is data, not source: `fixtures/` and `generated/` are outside the
   Prettier and SPDX-header rules. Runners and harness code are source and follow
   both.

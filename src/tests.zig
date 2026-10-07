@@ -800,6 +800,83 @@ test "overlay: result edges that cross are declined, and the graph labelling is 
     try std.testing.expectError(error.UnnodableCrossing, geo.unionAll(a, &both, .{}));
 }
 
+test "makeValid: JTS GeometryFixer's rules on hand-digitized mistakes" {
+    // Expected areas are Shapely's make_valid(method='structure'), which
+    // follows the same rules.
+    const cases = [_]struct { ring: []const geo.Coordinate, expected: f64 }{
+        // A bowtie keeps both lobes, whichever way each one turns.
+        .{ .ring = &.{ xy(0, 0), xy(10, 10), xy(10, 0), xy(0, 5), xy(0, 0) }, .expected = 41.666666666666664 },
+        // Two twists, three lobes.
+        .{ .ring = &.{ xy(0, 0), xy(10, 10), xy(20, 0), xy(30, 10), xy(30, 0), xy(20, 10), xy(10, 0), xy(0, 10), xy(0, 0) }, .expected = 150 },
+        // A loop that re-covers the body leaves no hole.
+        .{ .ring = &.{ xy(0, 0), xy(10, 0), xy(10, 10), xy(4, 10), xy(4, 4), xy(14, 4), xy(14, 6), xy(2, 6), xy(2, 10), xy(0, 10), xy(0, 0) }, .expected = 100 },
+        // Overshooting the closing vertex adds the overshoot.
+        .{ .ring = &.{ xy(0, 0), xy(10, 0), xy(10, 10), xy(0, 10), xy(0, -2), xy(-1, -2), xy(-1, 0), xy(0, 0) }, .expected = 102 },
+        // A spike, a ring traced twice, and a clockwise shell.
+        .{ .ring = &.{ xy(0, 0), xy(10, 0), xy(10, 5), xy(14, 5), xy(12, 5), xy(10, 5), xy(10, 10), xy(0, 10), xy(0, 0) }, .expected = 100 },
+        .{ .ring = &.{ xy(0, 0), xy(10, 0), xy(10, 10), xy(0, 10), xy(0, 0), xy(10, 0), xy(10, 10), xy(0, 10), xy(0, 0) }, .expected = 100 },
+        .{ .ring = &.{ xy(0, 0), xy(0, 10), xy(10, 10), xy(10, 0), xy(0, 0) }, .expected = 100 },
+        // Open, and with a vertex that is not a number: closed, and removed.
+        .{ .ring = &.{ xy(0, 0), xy(10, 0), xy(10, 10), xy(0, 10) }, .expected = 100 },
+        .{ .ring = &.{ xy(0, 0), xy(10, 0), xy(std.math.nan(f64), 3), xy(10, 10), xy(0, 10), xy(0, 0) }, .expected = 100 },
+        // Collapsed to a line: nothing with area is left.
+        .{ .ring = &.{ xy(0, 0), xy(5, 0), xy(10, 0), xy(0, 0) }, .expected = 0 },
+    };
+    for (cases) |case| {
+        var s: Shapes = .{};
+        var out = try geo.makeValid(a, s.one(case.ring).polygons, .{});
+        defer out.deinit();
+        try std.testing.expectApproxEqAbs(case.expected, area(out.polygons), 1e-9);
+    }
+}
+
+test "makeValid: holes are repaired alone, cut where they meet the shell, kept where they do not" {
+    const shell = rect(0, 0, 10, 10);
+    const inner = rect(2, 2, 6, 6);
+    const overlap = rect(4, 4, 8, 8);
+    // The same square wound the other way. Holes swept together would let
+    // the two cancel where they overlap; repaired one at a time, they cannot.
+    const reversed = [_]geo.Coordinate{ xy(4, 4), xy(4, 8), xy(8, 8), xy(8, 4), xy(4, 4) };
+    const outside = rect(20, 20, 22, 22);
+    const across = rect(5, 5, 15, 8);
+    const cases = [_]struct { holes: []const []const geo.Coordinate, expected: f64 }{
+        .{ .holes = &.{ &inner, &overlap }, .expected = 72 },
+        .{ .holes = &.{ &inner, &reversed }, .expected = 72 },
+        .{ .holes = &.{&outside}, .expected = 104 },
+        .{ .holes = &.{&across}, .expected = 85 },
+    };
+    for (cases) |case| {
+        var rings: [3]geo.LinearRing = undefined;
+        rings[0] = &shell;
+        for (case.holes, 1..) |hole, k| rings[k] = hole;
+        const polygon = [_]geo.Polygon{.{ .rings = rings[0 .. case.holes.len + 1] }};
+        var out = try geo.makeValid(a, &polygon, .{});
+        defer out.deinit();
+        try std.testing.expectApproxEqAbs(case.expected, area(out.polygons), 1e-9);
+    }
+
+    // An island in a donut's hole is a second polygon, and survives the union.
+    const ring = rect(0, 0, 10, 10);
+    const hole = rect(2, 2, 8, 8);
+    const island = rect(4, 4, 6, 6);
+    var rings = [_]geo.LinearRing{ &ring, &hole, &island };
+    const pair = [_]geo.Polygon{ .{ .rings = rings[0..2] }, .{ .rings = rings[2..3] } };
+    var out = try geo.makeValid(a, &pair, .{});
+    defer out.deinit();
+    try std.testing.expectApproxEqAbs(68, area(out.polygons), 1e-9);
+}
+
+test "makeValid leaves valid polygons as they are" {
+    var s: Shapes = .{};
+    const shell = rect(0, 0, 10, 10);
+    const hole = rect(2, 2, 6, 6);
+    var out = try geo.makeValid(a, s.donut(&shell, &hole).polygons, .{});
+    defer out.deinit();
+    try std.testing.expectEqual(@as(usize, 1), out.polygons.len);
+    try std.testing.expectEqual(@as(usize, 2), out.polygons[0].rings.len);
+    try std.testing.expectApproxEqAbs(84, area(out.polygons), 1e-12);
+}
+
 test "relate: the matrix for the textbook polygon cases, in JTS's order" {
     const unit = rect(0, 0, 10, 10);
     const inner = rect(2, 2, 8, 8);

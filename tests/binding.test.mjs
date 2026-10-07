@@ -333,3 +333,74 @@ describe('the predicates', () => {
     ).toThrow(QdgeoError);
   });
 });
+
+describe('makeValid', () => {
+  const bowtie = [
+    [
+      [0, 0],
+      [10, 10],
+      [10, 0],
+      [0, 5],
+      [0, 0],
+    ],
+  ];
+
+  // The other operations read a self-crossing ring by its winding, the way
+  // JSTS's `buffer(0)` does, and keep only the lobes that wind the same way
+  // as the whole. Repairing first is what keeps the rest.
+  test('a bowtie keeps both lobes, where the operations read only one', () => {
+    expect(area(geo.makeValid([bowtie]))).toBeCloseTo(41.666666666666664, 9);
+    expect(area(geo.union([bowtie]))).toBeCloseTo(33.333333333333336, 9);
+    expect(geo.makeValid([bowtie]).length).toBe(2);
+  });
+
+  test('holes are cut where they meet the shell and kept where they do not', () => {
+    const shell = square(0, 0, 10)[0];
+    expect(area(geo.makeValid([[shell, square(2, 2, 4)[0]]]))).toBeCloseTo(84, 9);
+    expect(area(geo.makeValid([[shell, square(20, 20, 2)[0]]]))).toBeCloseTo(104, 9);
+  });
+
+  // The binding passes rings through as given, so the repair sees exactly
+  // what a digitizing tool produced.
+  test('an open ring is closed and a vertex that is not a number is removed', () => {
+    const open = [
+      [
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 10],
+      ],
+    ];
+    expect(area(geo.makeValid([open]))).toBeCloseTo(100, 9);
+    const hole = [
+      [
+        [0, 0],
+        [10, 0],
+        [NaN, 3],
+        [10, 10],
+        [0, 10],
+        [0, 0],
+      ],
+    ];
+    expect(area(geo.makeValid([hole]))).toBeCloseTo(100, 9);
+  });
+
+  test('a ring with no area left is dropped, not an error', () => {
+    const line = [
+      [
+        [0, 0],
+        [5, 0],
+        [10, 0],
+        [0, 0],
+      ],
+    ];
+    expect(geo.makeValid([line]).length).toBe(0);
+  });
+
+  test('valid input comes back unchanged, and the result chains', () => {
+    expect(geo.equals(geo.makeValid([a, b]), geo.union([a, b]))).toBe(true);
+    expect(area(geo.difference(geo.makeValid([bowtie]), [square(0, 0, 5)]))).toBeGreaterThan(0);
+    expect(area(geo.makeValid([bowtie], { distance: 1 }))).toBeGreaterThan(41.67);
+    expect(area(geo.apply(OP.makeValid, [bowtie]))).toBeCloseTo(41.666666666666664, 9);
+  });
+});

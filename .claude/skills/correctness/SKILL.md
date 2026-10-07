@@ -1,11 +1,11 @@
 ---
 name: correctness
-description: Run qdgeo's full correctness sweep — native tests, the JTS Topology Suite, the WASM runtime checks, and the parcel cluster corpora that find overlay failures the fixture suite misses. Use when asked to verify correctness, check for regressions, before committing an overlay change, or after touching sweep.zig, offset.zig or operations.zig.
+description: Run qdgeo's full correctness sweep — native tests, the JTS Topology Suite, the WASM runtime checks, the parcel cluster corpora, and the edited-geometry fuzz suites that find overlay failures the parcels miss. Use when asked to verify correctness, check for regressions, before committing an overlay change, or after touching sweep.zig, offset.zig or operations.zig.
 ---
 
 # Verifying correctness
 
-Four layers, cheapest first. Run all of them before publishing a claim about
+Five layers, cheapest first. Run all of them before publishing a claim about
 correctness; run the first two — which is `npm run check` — before any commit
 that touches the overlay.
 
@@ -93,6 +93,27 @@ Compare areas against GEOS whenever the failure count drops.
    26 of 26 workloads, and **no line mentioning `zig-native` or `zig-wasm`** in
    the failed-checks block. Other engines' failures are expected and listed
    there permanently.
+
+5. **The fuzz suites.** Edited geometry, which the parcels are not: vertices a
+   few ulps off other edges, self-crossing rings, misplaced holes. Four overlay
+   defects shipped through 1.1.0 that only this finds. About two minutes:
+
+   ```sh
+   .venv/bin/python tests/compare/fuzz.py overlay; echo "exit=$?"
+   .venv/bin/python tests/compare/fuzz.py make-valid; echo "exit=$?"
+   ```
+
+   Each asserts its baseline of *adjudicated* wrong answers — every
+   disagreement with GEOS is settled exactly, and GEOS loses some of them:
+
+   | suite | cases | qdgeo wrong |
+   | --- | ---: | ---: |
+   | `overlay`, seed 7 (union, intersection, difference) | 10,000 × 3 | **1** |
+   | `make-valid`, seed 1 | 20,000 | **0** |
+
+   The overlay's 1 is documented in `src/CLAUDE.md` and the README. Run with
+   `--show` to get the inputs as WKT, and reduce against the exact referee,
+   not against GEOS.
 
 ## When a failure count changes
 

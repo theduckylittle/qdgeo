@@ -14,8 +14,9 @@ everywhere; the deep context lives next to the code it describes:
 
 **qdgeo** — "Quick & Dirty Geographic Library". A narrow, allocator-explicit 2D
 geometry library in **Zig 0.16.0**: the four boolean operations and rounded
-signed buffer, over one degenerate-tolerant planar overlay, and the DE-9IM
-predicates over the same exact arithmetic. The deployment target
+signed buffer, over one degenerate-tolerant planar overlay, the DE-9IM
+predicates over the same exact arithmetic, and `makeValid`, the one operation
+that repairs, with JTS `GeometryFixer`'s rules. The deployment target
 is **WASM**; the native shared library exists so the differential harness can
 call it, and so a Python module has something to link. It ships to npm as an
 ESM package — the binding `js/qdgeo.js`, two host adapters, the WASM artifact
@@ -83,7 +84,7 @@ zig build wasm                             # freestanding, import-free, stripped
 
 # Correctness. Zig + Node, nothing else, about two seconds.
 npm run check                              # zig build test x2, then every JS suite
-zig build test                             # 34 native tests
+zig build test                             # 47 native tests
 zig build test -Doptimize=ReleaseSafe
 npm test                                   # vitest: ABI, binding, adapters, JTS
 npm test -- tests/jts                      # one file or directory
@@ -94,6 +95,8 @@ npm run fetch-data                         # parcels.geoparquet for the compare 
 npm run compare                            # differential suite (see the `compare` skill)
 npm run sizes                              # bundle sizes for every engine
 .venv/bin/python tests/compare/probes.py   # precision probes
+.venv/bin/python tests/compare/fuzz.py overlay      # edited-geometry fuzz, exact referee
+.venv/bin/python tests/compare/fuzz.py make-valid   # makeValid against Shapely
 
 # Generated from the JSDoc on the binding and adapters.
 npm run types                              # declaration types into types/
@@ -120,6 +123,7 @@ setup (venv, `npm ci`, the optional `cargo build --release`) is in
 | `src/predicates.zig` | Adaptive `orient` / `areaSign`, f128 `area`, segment `intersection` |
 | `src/sweep.zig` | The overlay engine: degenerate-tolerant Martinez-Rueda |
 | `src/operations.zig` | `unionAll`, `buffer*`; input normalization, band generation |
+| `src/valid.zig` | `makeValid`: JTS `GeometryFixer`'s rules, one ring at a time over the overlay |
 | `src/relate.zig` | The predicates: `intersects` with its early exits, and the DE-9IM `relate` matrix every other one is read from |
 | `src/abi.zig` | The host ABI — the whole browser surface, and the wasm root |
 | `src/abi_wkb.zig` | The WKB ABI, linked into the native library only |
@@ -158,10 +162,12 @@ setup (venv, `npm ci`, the optional `cargo build --release`) is in
   was tried and did not pay" precisely so they are not tried twice. A change
   argued from a benchmark needs the benchmark in the commit message or the
   docs.
-- **Invalid input is rejected, not repaired**, and failures are errors — the
-  product decision behind the whole library. The full statement and its costs
-  are in `src/CLAUDE.md`; the README's "Invalid input" section is the public
-  version. Do not add a fixer, a tolerance, or a snap anywhere.
+- **Nothing is repaired behind the caller's back**, and failures are errors —
+  the product decision behind the whole library. The operations reject bad
+  structure and read topology as given; `makeValid` is the one repair, and only
+  when called. The full statement and its costs are in `src/CLAUDE.md`; the
+  README's "Invalid input" section is the public version. Do not add a fixer to
+  any other path, and no tolerance or snap anywhere — `makeValid` included.
 
 ## Releasing
 
@@ -169,8 +175,9 @@ The package publishes to npm from a clean checkout: `prepack` rebuilds the WASM
 artifact and regenerates `types/`, and CI's "Package manifest" step proves
 every `exports` target is in the tarball. The version in `package.json` is the
 single version of record. Before tagging a release: `npm run check`, the
-cluster corpora via the `correctness` skill (expect 0 buffer / 4 union
-failures), `npm run compare` if any engine or number changed, and a read
+cluster corpora and both fuzz suites via the `correctness` skill (expect 0
+buffer / 4 union failures, and the baselines `fuzz.py` asserts), `npm run
+compare` if any engine or number changed, and a read
 through `TODO.md`'s open items for anything that would change the public
 surface — an ABI status code or an export added after 1.0 is a compatibility
 promise, not a tweak.
@@ -183,9 +190,15 @@ promise, not a tweak.
   `operations.zig` does; `tests/wasm.test.mjs` asserts the import list is empty.
 - **`zig build test` passing does not mean the parcel suite passes**, and
   neither implies the JTS suite. See `TESTING.md` and `tests/CLAUDE.md` — the
-  suites answer different questions. All currently green: 34 native tests, 26 of
+  suites answer different questions. All currently green: 47 native tests, 26 of
   26 differential workloads native and WASM, 155 of 158 applicable JTS overlay
-  and buffer assertions, and 330 of 330 JTS predicate assertions.
+  and buffer assertions, 330 of 330 JTS predicate assertions, and both fuzz
+  baselines.
+- **The parcel corpora are not edited geometry.** Four overlay defects shipped
+  through 1.1.0 because no suite had vertices sitting a few ulps off other
+  edges, which is what hand-edited and repaired data is full of. `fuzz.py`
+  generates that, and settles every disagreement with GEOS exactly. Run it
+  after any change to `sweep.zig` or `predicates.zig`.
 - **The boundary metric adjudicates against exact arithmetic** (details in
   `tests/CLAUDE.md`), because GEOS is not a positional oracle on this data — it
   misplaces nearly parallel intersections by up to `1e-4 m` and emits filament
