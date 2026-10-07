@@ -94,7 +94,8 @@ export fn geom_input(coordinates: u32, rings: u32, polygons: u32, line_strings: 
 /// Every operation goes through one entry point, so adding one costs a value in
 /// `geometry.Mode` rather than another export.
 ///
-///   0 union, 1 intersection, 2 difference, 3 symmetric difference, 4 buffer.
+///   0 union, 1 intersection, 2 difference, 3 symmetric difference, 4 buffer,
+///   5 make valid.
 ///
 /// `subject` is how many of the block's leading polygons form the first operand;
 /// the rest are the second. Union cannot tell the difference and buffer takes
@@ -115,20 +116,23 @@ export fn geom_apply(op: u32, subject: u32, distance: f64, steps: u32) u32 {
 /// arrives and how it leaves; what happens in between is this, once.
 ///
 /// `op` is 0 union, 1 intersection, 2 difference, 3 symmetric difference,
-/// 4 buffer. `subject` is how many leading polygons form the first operand.
+/// 4 buffer, 5 make valid. `subject` is how many leading polygons form the
+/// first operand; make valid, like union, takes them all as one.
 pub fn execute(input: geo.BufferInput, op: u32, subject: u32, distance: f64, steps: u32) !geo.Geometry {
     const style: geo.BufferOptions = .{ .quadrant_segments = steps };
     if (op == 4) return geo.buffer(allocator, input, distance, style);
 
-    const mode: geo.Mode = switch (op) {
-        0 => .union_all,
-        1 => .intersection,
-        2 => .difference,
-        3 => .symmetric_difference,
-        else => return error.InvalidOptions,
+    var output = if (op == 5) try geo.makeValid(allocator, input.polygons, .{}) else output: {
+        const mode: geo.Mode = switch (op) {
+            0 => .union_all,
+            1 => .intersection,
+            2 => .difference,
+            3 => .symmetric_difference,
+            else => return error.InvalidOptions,
+        };
+        const split = @min(subject, input.polygons.len);
+        break :output try geo.boolean(allocator, input.polygons[0..split], input.polygons[split..], mode, .{});
     };
-    const split = @min(subject, input.polygons.len);
-    var output = try geo.boolean(allocator, input.polygons[0..split], input.polygons[split..], mode, .{});
 
     // A nonzero distance buffers the result of the boolean operation. Doing it
     // here rather than in a second call keeps the intermediate geometry inside

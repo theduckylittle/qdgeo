@@ -16,6 +16,7 @@ pub const boolean = @import("operations.zig").boolean;
 pub const Mode = @import("geometry.zig").Mode;
 pub const BufferOptions = @import("operations.zig").BufferOptions;
 pub const BufferInput = @import("operations.zig").BufferInput;
+pub const makeValid = @import("valid.zig").makeValid;
 pub const buffer = @import("operations.zig").buffer;
 pub const Collection = @import("geometry.zig").Collection;
 pub const Matrix = @import("relate.zig").Matrix;

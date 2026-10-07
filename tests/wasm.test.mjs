@@ -49,7 +49,14 @@ function flat(
   };
 }
 
-const OP = { union: 0, intersection: 1, difference: 2, symmetricDifference: 3, buffer: 4 };
+const OP = {
+  union: 0,
+  intersection: 1,
+  difference: 2,
+  symmetricDifference: 3,
+  buffer: 4,
+  makeValid: 5,
+};
 const square = (x0, y0, x1, y1) => [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0];
 
 // Two overlapping squares as one MultiPolygon: two polygons, one ring each.
@@ -129,6 +136,17 @@ describe('the four boolean rules, over two overlapping squares split into operan
 
   test('difference is asymmetric: both squares as the subject leaves nothing to cut', () => {
     expect(area(flat(pair, () => w.geom_apply(OP.difference, 2, 0, 0)))).toBe(7);
+  });
+});
+
+describe('make valid, op 5', () => {
+  // A bowtie, open: the flat ABI does no ring validation, so the repair sees
+  // the ring exactly as the host wrote it. Both lobes come back, closed.
+  test('repairs what the host wrote, open rings included', () => {
+    const bowtie = { coordinates: [0, 0, 10, 10, 10, 0, 0, 10], ringEnds: [4], polygonEnds: [1] };
+    const out = flat(bowtie, () => w.geom_apply(OP.makeValid, 1, 0, 0));
+    expect(out.polygonEnds.length).toBe(2);
+    expect(area(out)).toBe(50);
   });
 });
 

@@ -45,6 +45,57 @@ every left event, and only then look for crossings. Splitting a segment while an
 exact duplicate of it is still queued is unrecoverable, because rounding puts the
 crossing on neither copy's line afterwards.
 
+### What the sweep caches, and the four ways it went stale
+
+Each segment caches the winding below it (`below`) when it enters the status
+line, and the labelling trusts that cache. Four defects shipped through 1.1.0
+because the cache or the noding behind it went wrong, and none showed up on the
+parcels; `tests/compare/fuzz.py overlay` found them all on edited-style
+geometry, and each has a reduced test in `src/tests.zig`. Against 1.1.0 the
+fuzz baseline went from **24 wrong answers in 30,000 operations to 1**.
+
+- **The gap is held by position, and openings move it.** When segments close
+  at a point, the two that become neighbours across the gap must be tested.
+  The openings go in first, and each one at or below the gap shifts it up, so
+  `under` is adjusted as they go in. Reading `gap - 1` afterwards tested the
+  wrong pair and left crossings unnoded.
+- **Windings are set after the batch, never per insertion.** `reenter` sets
+  `below` for the whole block of segments that start at a point, bottom to top,
+  once they are all in. Two things make per-insertion wrong: queued subdivision
+  events are ordered by a far endpoint that a later split can move, so openings
+  can arrive top first; and a segment passing exactly through the point is only
+  divided there after the insertions, so the point is swept twice and the first
+  batch's windings are stale.
+- **A boolean result is checked for crossing edges** (`Check.crossings`).
+  Dividing a segment rotates its supporting line by a rounding step, and a
+  vertex already swept past can end up on the other side of it: a crossing
+  behind the sweep line, never looked at again. The result edges are swept once
+  more, and any crossing declines the answer, counts as lost, and goes to the
+  re-noding pass. Skipped when nothing was divided, and skipped for buffer,
+  whose result is nearly every edge and which showed no such case in 10,000
+  fuzzed buffers. **About 3% on the 4,040-parcel union.**
+- **A lost crossing between operands is checked for consequence**
+  (`misorders`). A crossing that rounds outside either segment leaves them in
+  their pre-crossing order for their whole length. If swapping them flips
+  either one between result edge and not, both labellings decline. Within one
+  operand the same test fires on the parcel unions, whose 2 nm cracks between
+  neighbours both the sweep and GEOS close, so it is not applied there — that
+  is the one wrong answer left in the fuzz baseline, and the README says so.
+
+And the graph labelling is never asked when `lost` is nonzero, including the
+lost crossings the result check finds: its wedge model is exact only on an
+exact arrangement, and it was assembling wrong rings on inexact ones.
+
+**Two callers is one too many in the hot path.** In the WASM build, giving
+`segmentLess` a second caller (from `misordered`) stopped LLVM inlining it into
+the status-line searches: **13% on the 4,040-parcel union**, from a function
+that almost never runs. A second caller of `enter` (from an earlier `reenter`)
+cost **3-5% on every buffer**, and forcing it `inline` instead cost 7 KB of
+artifact. Both were fixed by keeping one caller — `misordered` takes the order
+from its caller, and `enter` is called only from `reenter`. Native showed a
+third of the effect. Before adding a call to a small function in `sweep.zig`,
+measure the WASM build, interleaved against the previous artifact.
+
 ### Two labellings, one fallback (`relabel` in `src/sweep.zig`)
 
 Deciding which side of each segment is filled can be done two ways, and neither
@@ -367,15 +418,22 @@ and could not stop early. Dropping `apart` would save 1.4 KB raw and the
   proven roundoff bound, not a tolerance; `f128` multiplies are `__multf3`
   libcalls and were 25% of a union before it existed.
   `orient` short-circuits a *degenerate* triple — two of the three points
-  bit-identical — before the expansion. That is an equality test, not a
-  tolerance, and it is not optional: on parcel data 98% of filter failures are
+  bit-identical — before the expansion. That is an equality test on the
+  **points**, not on their rounded differences from the third: `a - c == b - c`
+  holds for points an ulp apart far from `c`, and until 1.2.0 that called
+  non-collinear triples collinear and dropped rings in assembly. It is not
+  optional either: on parcel data 98% of filter failures are
   exactly that case, and skipping the expansion for them is 1.6x on the sweep.
   See "Where our own time goes" in `TODO.md`.
-- **Invalid input is rejected, and that is a product decision, not an
-  omission.** It is documented in the README under "Invalid input" as an
-  explicit divergence from JTS/GEOS, and it is why the adjudicated vertex error
-  is `0 m`. It costs 3 JTS assertions, all degenerate rings. Repair belongs
-  upstream in the caller's own pipeline; do not add a fixer here.
+- **Nothing is repaired unless the caller asks, and that is a product
+  decision, not an omission.** The operations reject bad *structure* — open
+  rings, fewer than four points, zero area, out-of-range coordinates — and read
+  *topology* as given, by winding, without checking it: a self-crossing ring
+  keeps only the lobes that wind with the whole, as JSTS's `buffer(0)` does.
+  Checking would cost a sweep per call. `makeValid` is the one repair, called
+  explicitly; see below. Documented in the README under "Invalid input". It is
+  why the adjudicated vertex error is `0 m`, and it costs 3 JTS assertions, all
+  degenerate rings. Do not add a fixer to any other path.
 - **Failures are errors, not repairs.** Note that JTS and GEOS do *not* hold this
   line for buffer — they fall back to snap-rounded integer grids. See
   `docs/BUFFER_APPROACH.md`; changing the policy here is a decision, not a fix.
@@ -389,7 +447,9 @@ and could not stop early. Dropping `apart` would save 1.4 KB raw and the
   snapping would close it. Read "The buffer produces unclosed boundaries" in
   `TODO.md` before assuming a new report is a different bug.
 - **Parsing validates structure, not OGC topology.** Valid input topology is a
-  precondition of `unionAll`.
+  precondition of `unionAll`. The flat ABI validates nothing at all; the
+  operations validate rings in `normalize`, and `makeValid` accepts what they
+  would reject.
 - **One representation, hosts convert.** The library speaks flat coordinate
   blocks. It does not own a GeoJSON serialiser and should not grow one: a
   MapLibre-shaped GeoJSON writer was built, measured *slower* than letting the
@@ -397,7 +457,7 @@ and could not stop early. Dropping `apart` would save 1.4 KB raw and the
   coordinates union to 3,080 — so conversion at the edge costs under a
   millisecond and belongs to whoever knows the target's types.
 - **Buffer composes onto the boolean operations.** `geom_apply` applies a
-  nonzero `distance` to the *result* of ops 0-3, not just to op 4. It is done
+  nonzero `distance` to the *result* of ops 0-3 and 5, not just to op 4. It is done
   inside `abi.zig` rather than by the host calling twice, so the intermediate
   geometry never crosses the boundary. The Zig API composes the same thing by
   hand — `boolean(...)` then `bufferAll(result.polygons, ...)` — and does not
@@ -406,6 +466,7 @@ and could not stop early. Dropping `apart` would save 1.4 KB raw and the
   takes an op code and an operand split; `geometry.Mode.covers` is the entire
   difference between union, intersection, difference and symmetric difference,
   because the overlay already carries a winding counter per operand.
+  `makeValid` is op 5 and one more rule, `.nonzero`.
 - **`geometry.zig` owns the shared vocabulary.** `Point`, `Box`, `Limits`, and
   the distance helpers live there once. Before adding a bounding box, a budget
   struct or a point-to-segment distance, check it is not already there — all
@@ -424,6 +485,30 @@ and could not stop early. Dropping `apart` would save 1.4 KB raw and the
   build anything. Letting `ArrayList` grow by doubling copied 267,046 events
   through every step and was three quarters of the sweep's build phase; the
   removed graph backend had the same shape.
+
+## Repair (`src/valid.zig`)
+
+`makeValid` follows JTS's `GeometryFixer`, so code ported from JTS gets the
+answer it expects and code ported from JSTS's `buffer(0)` stops losing lobes.
+Each ring is swept **alone** under `Mode.nonzero` — winding non-zero in either
+direction — which keeps every lobe of a bowtie and leaves no hole where a loop
+re-covers the body. Alone matters: two overlapping holes drawn in opposite
+directions, swept together, cancel where they overlap. Each repaired hole is
+then classified whole: it is cut from the shell if it meets it
+(`relate.intersects`), and becomes a polygon of its own if not. A collection's
+repaired polygons are unioned. Non-finite vertices are removed, repeats merged,
+open rings closed, and anything with no area left is dropped, so the result is
+always areal. One polygon with no holes is one sweep.
+
+The rule has a hard edge, and rounding decides which side of it a hole lands
+on: a hole that touches its shell only through a zero-width spike becomes, once
+a crossing in the spike's ring is rounded, a sliver 1e-15 wide that meets the
+shell. GEOS's snapping lands the other way. `fuzz.py make-valid` counts those
+separately rather than calling either side wrong.
+
+Measured: all 4,040 valid parcels come back unchanged; 19,977 of 20,000 fuzzed
+hand-drawn polygons match Shapely's `make_valid(method='structure')`, 21 are
+`UnnodableCrossing`, and 2 are that hard edge.
 
 ## Host ABI (`src/abi.zig`, `src/abi_wkb.zig`)
 

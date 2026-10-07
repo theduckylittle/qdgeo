@@ -119,6 +119,20 @@ ReleaseSafe, all four build targets, `npm test`, the examples build, the
 generated types, the package manifest, Prettier, and `zig fmt`. Zig and Node
 only. No Python step and no Rust step.
 
+### Fuzzing edited geometry
+
+```sh
+zig build native -Doptimize=ReleaseSafe
+.venv/bin/python tests/compare/fuzz.py overlay      # about a minute
+.venv/bin/python tests/compare/fuzz.py make-valid   # about forty seconds
+```
+
+Opt-in and local, like the comparison: it needs GEOS. It generates polygons the
+way people break them, runs them through the overlay and `makeValid`, and
+settles every disagreement with GEOS in exact arithmetic, so a failure means
+qdgeo is wrong, not just different. Each suite asserts a recorded baseline at
+its default seed. `tests/CLAUDE.md` has the rules.
+
 ## Performance and comparison
 
 ```sh
