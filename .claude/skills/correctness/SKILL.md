@@ -115,6 +115,20 @@ Compare areas against GEOS whenever the failure count drops.
    `--show` to get the inputs as WKT, and reduce against the exact referee,
    not against GEOS.
 
+## Optional: the ceiling
+
+Not a correctness layer, but it runs on the same tooling and it is where a
+memory regression shows. After anything that changes allocation — an arena, a
+reserve, a copy — run it and compare against the baseline in the file:
+
+```sh
+npm run stress; echo "exit=$?"
+```
+
+It grows a closed-form fabric through every operation until the instance
+fails, and asserts the ceiling and the peak heap. A moved baseline is a
+finding either way; `TESTING.md` has the current table.
+
 ## When a failure count changes
 
 Reduce it to the smallest input that still shows it, against an oracle that says

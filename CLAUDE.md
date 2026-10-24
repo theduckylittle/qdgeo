@@ -89,6 +89,7 @@ zig build test -Doptimize=ReleaseSafe
 npm test                                   # vitest: ABI, binding, adapters, JTS
 npm test -- tests/jts                      # one file or directory
 npm run test:watch                         # vitest, re-running on save
+npm run stress                             # opt-in: grow each operation until the 512 MiB instance fails
 
 # Comparison. Local and opt-in; needs GEOS, the dataset, optionally Rust.
 npm run fetch-data                         # parcels.geoparquet for the compare suite

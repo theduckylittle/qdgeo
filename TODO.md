@@ -738,6 +738,36 @@ tells a caller in advance whether their input will take that path.
 - [x] **No leak across calls.** Eight repeats of the same workload hold flat at
       11.6 MiB and 23.7 MiB — freed memory is reused, the high-water mark is one
       call's working set, not a running total.
+- [x] **The event arrays are reserved from the heap, not the arena** (2026-10-24).
+      Traced with a native harness that accounts like `wasm_allocator`: every
+      request rounds to a power of two, an arena node is 1.5x its request, and
+      the two together reserved 1.7x the exact peak — a 4,127-parcel hairline
+      buffer needed 453 MiB exactly and 787 MiB reserved, failing at 181 MiB in
+      use on a 258 MiB node that wanted a 512 MiB slot. `Engine.backing` holds
+      `p` and `e` directly: union 4,040 83.4 → **56.8 MiB**, union 1,000 12.3 →
+      8.7, the complex buffer 23.7 → 25.2 (two blocks instead of one shared
+      node), time within noise on every workload, 192,194 bytes raw (+9,910)
+      and 69,968 gzipped (+647). Cluster corpora, differential suite and both
+      fuzz baselines unchanged. The README table is re-measured.
+- [x] **The ceiling is measured, not extrapolated** (2026-10-24). `npm run
+      stress` (`tests/stress.test.mjs`, opt-in) grows a parcel-like fabric with
+      closed-form answers (`tests/support/fabric.mjs`) by 2x in coordinates per
+      step, on a fresh instance per step, until each operation fails, and
+      asserts every result exact to 1e-9, every failure a clean status, and the
+      ceiling and peak against a recorded baseline. At UTM magnitudes: union,
+      buffer and erosion pass 983,280 coordinates at 260 MiB and hit
+      `max_segments` (1,000,000) at the next step; intersection of two such
+      fabrics passes 246,083 at 292 MiB and runs out of memory at 492,566;
+      `makeValid` is below.
+- [x] **`makeValid` held five times the heap its union needed** (2026-10-24),
+      found by the stress test. Every per-ring sweep built its scratch and
+      result arenas *inside* `makeValid`'s arena, where a free is a no-op, so
+      65,536 rings' worth of sweep scratch stayed allocated until the final
+      union. The per-ring overlays now run on the backing allocator and only
+      their results are copied into the arena: 246,083 coordinates 322 →
+      **82 MiB**, 523 → 439 ms, and the ceiling moves from 492,566 (out of
+      memory) to the same 983,280 as union, now limit-bound at 324 MiB. Make-
+      valid fuzz baseline (0 of 20,000) and all 47 native tests unchanged.
 - [x] **Published the envelope.** README has "Memory, and what size input this
       is good for": the measured table, the marginal cost per coordinate, the
       extrapolated ceiling marked as extrapolated, the 1.8x cost of the retry

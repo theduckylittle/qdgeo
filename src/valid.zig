@@ -39,6 +39,12 @@ const A = std.mem.Allocator;
 
 /// Repair `polygons` into valid ones. See the module comment for the rules.
 pub fn makeValid(a: A, polygons: []const g.Polygon, options: operations.BooleanOptions) !g.Geometry {
+    // The scratch arena holds only the repaired pieces. Every overlay a
+    // piece takes runs on `a` directly and is freed before the next one,
+    // because an arena cannot give back what a nested arena hands it: with
+    // the per-ring sweeps run inside this one, a fabric of 65,000 rings held
+    // five times the heap its final union needed and ran out at a size the
+    // union alone takes in 130 MiB.
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
     const sa = scratch.allocator();
@@ -49,7 +55,7 @@ pub fn makeValid(a: A, polygons: []const g.Polygon, options: operations.BooleanO
     // unioned, since repaired polygons may overlap one another.
     var pieces: usize = 0;
     for (polygons) |polygon| {
-        const fixed = try fixPolygon(sa, polygon, options.limits, &budget);
+        const fixed = try fixPolygon(a, sa, polygon, options.limits, &budget);
         if (fixed.len == 0) continue;
         try parts.appendSlice(sa, fixed);
         pieces += 1;
@@ -69,10 +75,11 @@ const Budget = struct {
     }
 };
 
-/// One polygon, repaired. The result is valid but may be several polygons.
-fn fixPolygon(sa: A, polygon: g.Polygon, limits: g.Limits, budget: *Budget) ![]const g.Polygon {
+/// One polygon, repaired. The result is valid but may be several polygons,
+/// and lives in `sa`; the work to get there is done on `a` and released.
+fn fixPolygon(a: A, sa: A, polygon: g.Polygon, limits: g.Limits, budget: *Budget) ![]const g.Polygon {
     if (polygon.rings.len == 0) return &.{};
-    const shell = try fixRing(sa, polygon.rings[0], limits, budget);
+    const shell = try fixRing(a, sa, polygon.rings[0], limits, budget);
     if (shell.len == 0 or polygon.rings.len == 1) return shell;
 
     // A hole is classified whole, after its own repair, the way
@@ -80,25 +87,29 @@ fn fixPolygon(sa: A, polygon: g.Polygon, limits: g.Limits, budget: *Budget) ![]c
     var cut: std.ArrayList(g.Polygon) = .empty;
     var outside: std.ArrayList(g.Polygon) = .empty;
     for (polygon.rings[1..]) |ring| {
-        const hole = try fixRing(sa, ring, limits, budget);
+        const hole = try fixRing(a, sa, ring, limits, budget);
         if (hole.len == 0) continue;
-        const meets = try relate.intersects(sa, .{ .polygons = shell }, .{ .polygons = hole }, .{});
+        const meets = try relate.intersects(a, .{ .polygons = shell }, .{ .polygons = hole }, .{});
         try (if (meets) &cut else &outside).appendSlice(sa, hole);
     }
 
     var body = shell;
     if (cut.items.len != 0) {
         const options: operations.BooleanOptions = .{ .limits = limits };
-        body = (try operations.boolean(sa, shell, cut.items, .difference, options)).polygons;
+        var difference = try operations.boolean(a, shell, cut.items, .difference, options);
+        defer difference.deinit();
+        body = try copy(sa, difference.polygons);
     }
     if (outside.items.len == 0) return body;
     try outside.appendSlice(sa, body);
-    return (try operations.unionAll(sa, outside.items, .{ .limits = limits })).polygons;
+    var joined = try operations.unionAll(a, outside.items, .{ .limits = limits });
+    defer joined.deinit();
+    return copy(sa, joined.polygons);
 }
 
 /// One ring, repaired into the region it winds around. Empty when nothing
 /// with area is left.
-fn fixRing(sa: A, ring: g.LinearRing, limits: g.Limits, budget: *Budget) ![]const g.Polygon {
+fn fixRing(a: A, sa: A, ring: g.LinearRing, limits: g.Limits, budget: *Budget) ![]const g.Polygon {
     var points: std.ArrayList(g.Coordinate) = .empty;
     try points.ensureTotalCapacity(sa, ring.len + 1);
     for (ring) |p| {
@@ -119,7 +130,20 @@ fn fixRing(sa: A, ring: g.LinearRing, limits: g.Limits, budget: *Budget) ![]cons
     try budget.take(points.items.len - 1);
 
     const paths = [_]g.Path{.{ .points = points.items }};
-    return (try sweep.execute(sa, &paths, .nonzero, limits, .crossings)).polygons;
+    var region = try sweep.execute(a, &paths, .nonzero, limits, .crossings);
+    defer region.deinit();
+    return copy(sa, region.polygons);
+}
+
+/// `polygons` duplicated into `a`, so their owner can be released.
+fn copy(a: A, polygons: []const g.Polygon) ![]const g.Polygon {
+    const out = try a.alloc(g.Polygon, polygons.len);
+    for (polygons, out) |polygon, *duplicate| {
+        const rings = try a.alloc(g.LinearRing, polygon.rings.len);
+        for (polygon.rings, rings) |ring, *r| r.* = try a.dupe(g.Coordinate, ring);
+        duplicate.* = .{ .rings = rings };
+    }
+    return out;
 }
 
 /// `polygons` copied into a result of its own, for the one-piece case where
@@ -127,12 +151,8 @@ fn fixRing(sa: A, ring: g.LinearRing, limits: g.Limits, budget: *Budget) ![]cons
 fn own(a: A, polygons: []const g.Polygon) !g.Geometry {
     var arena = std.heap.ArenaAllocator.init(a);
     errdefer arena.deinit();
-    const oa = arena.allocator();
-    const out = try oa.alloc(g.Polygon, polygons.len);
-    for (polygons, out) |polygon, *copy| {
-        const rings = try oa.alloc(g.LinearRing, polygon.rings.len);
-        for (polygon.rings, rings) |ring, *r| r.* = try oa.dupe(g.Coordinate, ring);
-        copy.* = .{ .rings = rings };
-    }
+    // Copied before the arena is moved into the result, so the move carries
+    // the allocations with it.
+    const out = try copy(arena.allocator(), polygons);
     return .{ .arena = arena, .polygons = out };
 }

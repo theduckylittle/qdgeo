@@ -34,6 +34,14 @@ there is no setup step to forget.
 - **`wasm.test.mjs`** drives the raw exports; **`binding.test.mjs`** drives
   `js/qdgeo.js`. They are separate on purpose: a rename in the ABI should break
   one of them loudly rather than both vaguely.
+- **`stress.test.mjs`** is opt-in (`QDGEO_STRESS=1`, or `npm run stress`)
+  and skipped otherwise: it grows a `support/fabric.mjs` fabric through every
+  operation on a fresh instance per step until the 512 MiB instance fails,
+  checks each answer against the fabric's closed form and each failure for a
+  clean status, and asserts the ceiling and the peak heap against the
+  baseline at the top of the file. Memory is deterministic, so when that
+  baseline moves, say why in the commit; do not just update the number.
+  `TESTING.md` has the table.
 - **`deck.test.mjs`** and **`leaflet.test.mjs`** need the examples'
   dependencies (`npm --prefix examples ci`) to run the real libraries over the
   output. Without them they skip; under `CI` they throw instead, because a

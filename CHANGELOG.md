@@ -6,6 +6,28 @@ Notable changes to qdgeo, newest first. The format follows
 the binding's API and the package's entry points only change with a major
 version.
 
+## Unreleased
+
+Memory only. No result, status code, export or API changes.
+
+- **Fixed: the sweep's two event arrays were reserved through the scratch
+  arena**, where an arena node is 1.5x its request and the WASM allocator then
+  rounds the node to a power of two. A 4,127-parcel hairline buffer needing
+  453 MiB exactly reserved 787 and failed at 181 MiB in use. The arrays now come
+  straight from the heap: the 4,040-parcel union peaks at 57 MiB instead of
+  83, the 1,000-parcel union at 8.7 instead of 12.3, at the same speed.
+- **Fixed: `makeValid` held about five times the heap its final union
+  needed**, because every per-ring sweep built its scratch inside
+  `makeValid`'s own arena, where nothing is freed until the call ends. On a
+  65,536-cell fabric it ran out of memory at 492,566 coordinates; it now
+  reaches the same 983,280-coordinate segment limit as `union`, and takes
+  82 MiB rather than 322 at 246,083 coordinates.
+- `npm run stress`, opt-in: grows a parcel-like fabric with closed-form answers
+  through every operation until the 512 MiB instance fails, checks each answer
+  to 1e-9 and each failure for a clean status, and pins the ceiling. The
+  README's memory section now quotes measured ceilings instead of an
+  extrapolation.
+
 ## 1.2.0 — 2026-10-07
 
 - `makeValid`: repairs invalid polygons, on request, with JTS's

@@ -66,6 +66,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "zig build test && zig build test -Doptimize=ReleaseSafe && npm test",
+    "stress": "zig build wasm && QDGEO_STRESS=1 vitest run tests/stress.test.mjs",
     "examples": "npm --prefix examples run dev",
     "examples:build": "npm --prefix examples run build",
     "compare": ".venv/bin/python tests/compare/run.py",

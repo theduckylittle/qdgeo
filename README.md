@@ -11,7 +11,7 @@ and the rest, and the DE-9IM `relate` matrix they are read from — over any mix
 of points, lines and polygons. And when a polygon arrives broken — drawn by
 hand, crossing itself — `makeValid` repairs it, with JTS's `GeometryFixer`
 rules, on request. That is very nearly all the geometry a web mapping
-application asks for. The WASM artifact is **182.3 KB raw, 69.5 KB gzipped**,
+application asks for. The WASM artifact is **185.4 KB raw, 70.1 KB gzipped**,
 declares no imports, and has no C or C++ dependency.
 
 > **Status.** The suites are green: 26 of 26 differential workloads, 155 of 158
@@ -33,12 +33,12 @@ declares no imports, and has no C or C++ dependency.
 
 |             | size gzipped |     speed |     correct | operations bundled                        |
 | ----------- | -----------: | --------: | ----------: | ----------------------------------------- |
-| **qdgeo**   |  **69.5 KB** | **1.00x** | **26 / 26** | four booleans, buffer, predicates, repair |
-| polyclip-ts |      15.4 KB |       26x |     10 / 12 | four booleans, **no buffer**              |
-| JSTS        |      73.9 KB |      7.2x |     24 / 26 | four booleans, buffer                     |
+| **qdgeo**   |  **70.1 KB** | **1.00x** | **26 / 26** | four booleans, buffer, predicates, repair |
+| polyclip-ts |      15.4 KB |       24x |     10 / 12 | four booleans, **no buffer**              |
+| JSTS        |      73.9 KB |      7.1x |     24 / 26 | four booleans, buffer                     |
 | Turf        |      82.3 KB |       17x |     23 / 26 | union, buffer                             |
-| Rust Geo    |     102.1 KB |     0.81x |     18 / 26 | union, buffer                             |
-| GEOS        |     778 KB † |    1.8x † |     26 / 26 | all of GEOS                               |
+| Rust Geo    |     102.1 KB |     0.82x |     18 / 26 | union, buffer                             |
+| GEOS        |     778 KB † |    1.4x † |     26 / 26 | all of GEOS                               |
 
 Speed is the geometric mean against qdgeo over each engine's **correct**
 workloads; lower is faster. Size is what a browser downloads — JavaScript
@@ -285,13 +285,13 @@ The shipped WASM keeps its runtime safety checks. They are close to free:
 
 |                         |      raw | gzipped | speed | output        |
 | ----------------------- | -------: | ------: | ----: | ------------- |
-| `ReleaseSafe` (shipped) | 182.3 KB | 69.5 KB | 1.00x | —             |
-| `ReleaseFast`           | 178.5 KB | 64.8 KB |  1.1x | bit-identical |
+| `ReleaseSafe` (shipped) | 185.4 KB | 70.1 KB | 1.00x | —             |
+| `ReleaseFast`           | 185.5 KB | 65.6 KB |  1.1x | bit-identical |
 
-`ReleaseFast` is about 10% faster, 3.8 KB smaller raw and 4.7 KB smaller
+`ReleaseFast` is about 10% faster, the same size raw and 4.5 KB smaller
 gzipped, and produces byte-for-byte identical geometry across all 26 workloads.
 It ships `ReleaseSafe` anyway, for the runtime safety checks — goal 4 — not for
-size. `ReleaseSmall` reaches 102.3 KB raw and 45.6 KB gzipped if size ever
+size. `ReleaseSmall` reaches 104.6 KB raw and 45.9 KB gzipped if size ever
 matters more than either.
 
 ## The parcel dataset
@@ -317,13 +317,17 @@ boolean operations and buffer. Every figure is the **median of three independent
 suite runs, each itself a median of 11 repeats**, on one idle machine.
 
 Three runs because one is not reproducible enough to publish. Across the three,
-engine geometric means moved by up to 14%, and individual cases by far more:
-qdgeo's own `donut-buffer-+1` spanned 0.038-0.13 ms and Turf's
-`nested-island-hole` 0.28-0.97 ms. Sub-millisecond cases are dominated by
+engine geometric means moved by up to 28%, and individual cases by far more:
+qdgeo's own `donut-buffer--20` spanned 0.0023-0.0089 ms and Turf's
+`donut-buffer-+1` 0.31-0.86 ms. Sub-millisecond cases are dominated by
 scheduling and JIT warmup rather than by geometry, and that reaches the WASM
 engines too, not only the JavaScript ones. The large workloads are steady: the
 4,040-parcel union held within 3% for every engine. Ratios are quoted to two
-significant figures because the third is noise.
+significant figures because the third is noise, and the sub-millisecond cases
+are where a geometric mean moves between sessions: GEOS measured 1.8x in one
+October session and 1.4x in the next, with every workload over a millisecond
+unchanged and the artifact no slower on any case when the two are interleaved
+in one process.
 
 **A wrong answer is not a fast answer.** Where an engine returns the wrong
 geometry its time is marked †, and it is excluded from every average. Rust Geo
@@ -361,9 +365,9 @@ Milliseconds. † marks a wrong answer.
 
 | parcels | qdgeo wasm | qdgeo native | GEOS | Rust Geo |   JSTS |   Turf | polyclip-ts |
 | ------: | ---------: | -----------: | ---: | -------: | -----: | -----: | ----------: |
-|      10 |       0.18 |         0.12 | 0.22 |  0.036 † |    8.1 |    2.3 |         4.0 |
-|     100 |        1.1 |         0.99 |  3.3 |   0.18 † |     33 |     18 |          20 |
-|   1,000 |         16 |           15 |   53 |    2.3 † |  370 † |  340 † |       340 † |
+|      10 |       0.22 |         0.13 | 0.22 |  0.036 † |    8.0 |    2.4 |         3.9 |
+|     100 |        1.1 |         0.94 |  3.3 |   0.19 † |     32 |     18 |          19 |
+|   1,000 |         16 |           15 |   52 |    2.0 † |  370 † |  340 † |       350 † |
 |   4,040 |        120 |          110 |  340 |     12 † | 2700 † | 2800 † |      2800 † |
 
 On the two largest unions, only qdgeo and GEOS return the right geometry.
@@ -372,11 +376,11 @@ On the two largest unions, only qdgeo and GEOS return the right geometry.
 
 | case                           | qdgeo wasm |  GEOS | Rust Geo | JSTS | Turf |
 | ------------------------------ | ---------: | ----: | -------: | ---: | ---: |
-| 1 parcel, +2 m                 |      0.034 | 0.039 |    0.028 | 0.27 | 0.84 |
-| 100 parcels, +2 m              |        1.1 |   3.5 |     0.29 |   25 |   23 |
-| 100 parcels, -10 m             |        1.1 |   3.6 |   0.39 † |   26 |   24 |
-| 19,208-coordinate parcel, +2 m |         24 |   6.6 |       44 |   24 |   71 |
-| 19,208-coordinate parcel, -2 m |         24 |    11 |       56 |   22 |   68 |
+| 1 parcel, +2 m                 |      0.034 | 0.039 |    0.027 | 0.31 | 0.83 |
+| 100 parcels, +2 m              |        1.0 |   3.5 |     0.29 |   26 |   24 |
+| 100 parcels, -10 m             |        1.2 |   3.6 |   0.40 † |   26 |   24 |
+| 19,208-coordinate parcel, +2 m |         24 |   6.7 |       45 |   24 |   71 |
+| 19,208-coordinate parcel, -2 m |         25 |    11 |       55 |   23 |   67 |
 
 ### Overall
 
@@ -385,15 +389,15 @@ only. Above 1.00 is slower than qdgeo.
 
 |                |     speed | workloads averaged | excluded as wrong                                |
 | -------------- | --------: | -----------------: | ------------------------------------------------ |
-| Rust Geo       |     0.81x |                 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
+| Rust Geo       |     0.82x |                 18 | all 4 parcel unions, 2 eroding buffers, 2 others |
 | **qdgeo wasm** | **1.00x** |                 26 | none                                             |
-| GEOS native    |      1.8x |                 26 | none                                             |
-| JSTS           |      7.2x |                 24 | 2 parcel unions                                  |
+| GEOS native    |      1.4x |                 26 | none                                             |
+| JSTS           |      7.1x |                 24 | 2 parcel unions                                  |
 | Turf           |       17x |                 23 | 2 parcel unions, 1 buffer                        |
-| polyclip-ts    |       26x |                 10 | 2 parcel unions                                  |
+| polyclip-ts    |       24x |                 10 | 2 parcel unions                                  |
 
-Across the three runs those means spanned 0.77-0.82, 1.7-1.9, 7.1-7.4, 17-18 and
-25-28 respectively. Treat them as one significant figure of real information
+Across the three runs those means spanned 0.81-0.96, 1.4-1.6, 7.1-7.6, 15-17 and
+18-24 respectively. Treat them as one significant figure of real information
 each. Measured against the 1.1.0 artifact in the same process, interleaved,
 1.2.0's unions are 3-5% slower — the 4,040-parcel union 119 ms against 115 ms —
 and its buffers 1-4%. That is the price of the overlay fixes in the
@@ -579,6 +583,14 @@ library has already declined.
   above the coordinates' precision, or rounding coordinates to a grid you are
   willing to accept, usually moves past it. Both change the answer slightly,
   which is why qdgeo will not do either on your behalf.
+- Working in a local frame helps more, and changes nothing. Projected
+  coordinates are large — a UTM northing is around 5,000,000 — and `f64` is
+  coarse there. Subtract an origin that sits on the grid of doubles at your
+  largest coordinate and every subtraction is exact; add it back to the
+  result and each vertex rounds by at most half that spacing. Measured on the
+  demo parcels in UTM 15N: buffers of 1,000 and 2,000 parcels that returned
+  `UNREPRESENTABLE` as given succeed in a local frame, and the full 4,127
+  still fail. GeoMoose does this before every buffer.
 - Splitting work into smaller batches makes this **more** likely, not less. Each
   overlay call carries the exposure independently, and a subset's geometry is
   not easier than the whole. Unioning the 4,040 parcels in batches of 250 hit
@@ -596,17 +608,45 @@ The browser is the target, so the ceiling is the WASM heap: **512 MiB**, set in
 | workload                         | input coordinates | peak heap | KiB per coordinate |
 | -------------------------------- | ----------------: | --------: | -----------------: |
 | union, 10 parcels                |                80 |   1.5 MiB |               19.2 |
-| union, 100 parcels               |               936 |   2.8 MiB |               3.08 |
-| union, 1,000 parcels             |            17,231 |  11.6 MiB |               0.69 |
-| union, 4,040 parcels             |           135,080 |  81.8 MiB |               0.62 |
-| buffer, 19,208-coordinate parcel |            19,208 |  23.7 MiB |               1.26 |
+| union, 100 parcels               |               936 |   2.0 MiB |               2.19 |
+| union, 1,000 parcels             |            17,231 |   8.7 MiB |               0.52 |
+| union, 4,040 parcels             |           135,080 |  56.8 MiB |               0.43 |
+| buffer, 19,208-coordinate parcel |            19,208 |  25.2 MiB |               1.34 |
 
 Fixed overhead dominates below about a thousand coordinates. Past that the
-marginal cost settles near **0.62 KiB per coordinate for a union and 1.3 for a
-buffer**, which puts the 512 MiB cap somewhere above 700,000 coordinates for a
-union and 350,000 for a buffer. Those two figures are extrapolated from the
-measured range, not measured themselves — treat them as the order of magnitude,
-not a contract.
+marginal cost settles near **0.43 KiB per coordinate for a union and 1.3 for a
+buffer** on parcels, whose rings mostly touch without crossing.
+
+The ceiling itself is measured, by `npm run stress`. It grows a parcel-like
+fabric of cells that share every edge, at UTM magnitudes, doubling the
+coordinates each step on a fresh instance until the operation fails, and checks
+every answer against a closed form on the way up:
+
+| operation, on the fabric              | largest input that passed | peak heap | what stops it             |
+| ------------------------------------- | ------------------------: | --------: | ------------------------- |
+| union, 65,536 cells                   |       983,280 coordinates |   260 MiB | `max_segments`, 1,000,000 |
+| buffer, 65,536 cells, +20 m           |       983,280 coordinates |   260 MiB | `max_segments`            |
+| buffer, 65,536 cells, −20 m           |       983,280 coordinates |   261 MiB | `max_segments`            |
+| `makeValid`, 65,536 cells             |       983,280 coordinates |   325 MiB | `max_segments`            |
+| intersection, two 16,384-cell fabrics |       246,083 coordinates |   292 MiB | out of memory next step   |
+
+So on an input where nothing crosses, the declared limit of a million segments
+comes before the heap does, with room to spare. Intersection is the one that
+runs out of memory first: every cell of one fabric crosses four of the other,
+and a crossing costs more than a shared edge. Every failure in the table is a
+status code, and every result below it matched its closed form to 1e-9.
+
+Two things about the allocator shape that envelope. The WASM allocator hands
+out power-of-two blocks, so a single request just over 256 MiB needs the whole
+512 MiB heap, and the arena that holds a call's scratch grows its nodes to 1.5x
+each request. The sweep's two event arrays, the largest blocks of any call, are
+therefore reserved straight from the heap rather than through the arena; that
+change alone took the 4,040-parcel union from 83 MiB to the 57 above, at the
+same speed. The same shape bit `makeValid` in 1.2.0: its per-ring sweeps ran
+inside its own arena, where nothing is freed until the call ends, so it held
+five times the heap its final union needed. They run on the heap now, and the
+fabric above that ran out of memory at 492,566 coordinates takes 82 MiB at
+246,083 where it took 322.
 
 Two things that are measured rather than extrapolated:
 
