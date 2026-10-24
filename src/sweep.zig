@@ -121,6 +121,11 @@ const Event = struct {
 
 const Engine = struct {
     a: A,
+    /// The event arrays are reserved from here, not from the arena, because
+    /// they are the two largest blocks of a call and an arena node sized to
+    /// hold one is 1.5x the request, which the WASM allocator then rounds up
+    /// to a power of two. Reserved exactly, they round once instead of twice.
+    backing: A,
     limits: Limits,
     mode: Mode,
     work: usize = 0,
@@ -171,8 +176,8 @@ const Engine = struct {
         if (!g.finite(p)) return error.CoordinateRange;
         if (en.e.items.len >= @min(en.limits.max_nodes, none - 1)) return error.LimitExceeded;
         const id: u32 = @intCast(en.e.items.len);
-        try en.p.append(en.a, p);
-        try en.e.append(en.a, ev);
+        try en.p.append(en.backing, p);
+        try en.e.append(en.backing, ev);
         return id;
     }
 
@@ -848,7 +853,9 @@ fn renodeOnce(a: A, sa: A, paths: []const Path, mode: Mode, limits: Limits) ![]c
     defer inner.deinit();
     const ia = inner.allocator();
 
-    var en: Engine = .{ .a = ia, .limits = limits, .mode = mode };
+    var en: Engine = .{ .a = ia, .backing = a, .limits = limits, .mode = mode };
+    defer en.p.deinit(a);
+    defer en.e.deinit(a);
     _ = try load(&en, ia, paths, limits) orelse return paths;
     try en.sweep();
 
@@ -899,8 +906,8 @@ fn load(en: *Engine, sa: A, paths: []const Path, limits: Limits) !?[]u32 {
         // Subdivision added 2% of the initial event count here, so an eighth is
         // ample. Exceeding it is a memory spike, not an error.
         const room = 2 * incoming + incoming / 8;
-        try en.p.ensureTotalCapacityPrecise(sa, room);
-        try en.e.ensureTotalCapacityPrecise(sa, room);
+        try en.p.ensureTotalCapacityPrecise(en.backing, room);
+        try en.e.ensureTotalCapacityPrecise(en.backing, room);
     }
     var segments: usize = 0;
     for (paths) |path| {
@@ -928,7 +935,9 @@ fn overlay(a: A, paths: []const Path, mode: Mode, limits: Limits, labelling: Lab
     const sa = scratch.allocator();
     const oa = result.arena.allocator();
 
-    var en: Engine = .{ .a = sa, .limits = limits, .mode = mode };
+    var en: Engine = .{ .a = sa, .backing = a, .limits = limits, .mode = mode };
+    defer en.p.deinit(a);
+    defer en.e.deinit(a);
     const order = try load(&en, sa, paths, limits) orelse return result;
     try en.sweep();
     lost.* = en.lost;
@@ -1084,7 +1093,9 @@ fn crossed(a: A, edges: []const Edge, points: []const g.Coordinate, limits: Limi
         ends[2 * k + 1] = points[edge.ends[1]];
         path.* = .{ .points = ends[2 * k ..][0..2] };
     }
-    var en: Engine = .{ .a = ia, .limits = limits, .mode = .union_all };
+    var en: Engine = .{ .a = ia, .backing = a, .limits = limits, .mode = .union_all };
+    defer en.p.deinit(a);
+    defer en.e.deinit(a);
     const order = try load(&en, ia, paths, limits) orelse return false;
     try en.sweep();
     return en.e.items.len != order.len or en.lost != 0;

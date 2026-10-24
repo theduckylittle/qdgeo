@@ -485,6 +485,14 @@ and could not stop early. Dropping `apart` would save 1.4 KB raw and the
   build anything. Letting `ArrayList` grow by doubling copied 267,046 events
   through every step and was three quarters of the sweep's build phase; the
   removed graph backend had the same shape.
+- **The event arrays come from the backing allocator, not the arena**
+  (`Engine.backing`). `std.heap.wasm_allocator` rounds every request to a
+  power of two, and an arena sizes a new node at 1.5x the request, so a
+  130 MiB reservation through the arena became a 258 MiB node and a 512 MiB
+  slot — an `OutOfMemory` with 181 MiB in use. Reserved directly, the two
+  arrays round once. Measured: 4,040-parcel union 83 → 57 MiB, buffer the
+  same, time unchanged on every workload, +647 B gzipped. The three engine
+  owners free them explicitly; everything else stays in the arena.
 
 ## Repair (`src/valid.zig`)
 
@@ -509,6 +517,15 @@ separately rather than calling either side wrong.
 Measured: all 4,040 valid parcels come back unchanged; 19,977 of 20,000 fuzzed
 hand-drawn polygons match Shapely's `make_valid(method='structure')`, 21 are
 `UnnodableCrossing`, and 2 are that hard edge.
+
+**The per-ring overlays run on the backing allocator, not on `makeValid`'s
+arena.** An arena cannot reclaim what a nested arena hands it, so when
+`fixRing` swept on `sa`, every ring's sweep scratch stayed allocated until the
+final union: a 65,536-cell fabric held 322 MiB at 246,083 coordinates where its
+union held 66, and ran out of memory at a size the union takes in 131 MiB.
+`fixRing` and `fixPolygon` take both allocators, do their overlay on `a`, and
+`copy` only the result polygons into `sa`: 82 MiB on the same input, and the
+same ceiling as union. `npm run stress` is where this would show again.
 
 ## Host ABI (`src/abi.zig`, `src/abi_wkb.zig`)
 
